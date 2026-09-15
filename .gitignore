@@ -8,6 +8,8 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+output/
+test-results/
 
 # Native
 .kotlin/
@@ -25,6 +27,10 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+medstudy-*.png
+__pycache__/
+*.pyc
+app/reference/*.zip
 
 # macOS
 .DS_Store

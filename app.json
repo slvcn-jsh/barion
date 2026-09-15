@@ -1,25 +1,60 @@
 {
   "expo": {
-    "name": "ansel",
-    "slug": "ansel",
+    "name": "BARION",
+    "slug": "barion",
+    "description": "Medical learning, for real life. Learn today. Heal tomorrow.",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "scheme": "barion",
+    "orientation": "default",
+    "icon": "./app/image/BARIONLOGO.png",
+    "backgroundColor": "#F6F9FD",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./app/image/BARIONLOGO.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./app/image/BARIONLOGO.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "headers": {
+            "Cross-Origin-Embedder-Policy": "credentialless",
+            "Cross-Origin-Opener-Policy": "same-origin"
+          }
+        }
+      ],
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "color": "#3B82F6",
+          "defaultChannel": "barion-study-plan"
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./app/image/BARIONLOGO.png",
+          "imageWidth": 240,
+          "dark": {
+            "backgroundColor": "#0F2D60",
+            "image": "./app/image/BARIONLOGO.png"
+          }
+        }
+      ],
+      "expo-sharing"
+    ]
   }
 }
