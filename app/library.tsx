@@ -4,13 +4,16 @@ import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '@/components/AppButton';
+import { AppShell } from '@/components/AppShell';
 import { LoadingState } from '@/components/ScreenState';
 import type { ArchivedItem, StudyCard, TrashItem } from '@/domain/types';
 import { initializeDatabase } from '@/storage/database';
 import {
   getArchivedItems,
+  getCardsNeedingSourceReview,
   getLeechCards,
   getTrashItems,
+  restoreCardFromSourceReview,
   restoreArchivedItem,
   restoreTrashItem,
   setCardsSuspended,
@@ -22,14 +25,21 @@ export default function ManageLibraryScreen() {
   const [trash, setTrash] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [leeches, setLeeches] = useState<StudyCard[]>([]);
+  const [needsReview, setNeedsReview] = useState<StudyCard[]>([]);
   const [actionId, setActionId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     await initializeDatabase();
-    const [nextArchived, nextTrash, nextLeeches] = await Promise.all([getArchivedItems(), getTrashItems(), getLeechCards()]);
+    const [nextArchived, nextTrash, nextLeeches, nextNeedsReview] = await Promise.all([
+      getArchivedItems(),
+      getTrashItems(),
+      getLeechCards(),
+      getCardsNeedingSourceReview(),
+    ]);
     setArchived(nextArchived);
     setTrash(nextTrash);
     setLeeches(nextLeeches);
+    setNeedsReview(nextNeedsReview);
     setLoading(false);
   }, []);
 
@@ -53,7 +63,8 @@ export default function ManageLibraryScreen() {
   if (loading) return <LoadingState label="Opening library controls" />;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <AppShell active="more">
+      <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.hero}>
         <View style={styles.heroIcon}>
           <Ionicons name="library-outline" size={27} color={colors.blue} />
@@ -66,7 +77,37 @@ export default function ManageLibraryScreen() {
           </Text>
         </View>
         <AppButton icon="documents-outline" label="Source library" variant="secondary" onPress={() => router.push('/sources')} />
+        <AppButton icon="shield-checkmark-outline" label="Data & backup" variant="secondary" onPress={() => router.push('/data')} />
       </View>
+
+      <LibrarySection
+        body="Cards marked confusing or unsafe are paused before they can affect recall. Check the evidence, edit if needed, then allow study again."
+        count={needsReview.length}
+        icon="alert-circle-outline"
+        title="Source checks"
+      >
+        {!needsReview.length ? <EmptyRow body="No cards are waiting for source review." /> : null}
+        {needsReview.map((card) => (
+          <View key={card.id} style={styles.row}>
+            <View style={[styles.rowIcon, styles.sourceCheckIcon]}><Ionicons name="alert-circle-outline" size={21} color="#9a5b09" /></View>
+            <View style={styles.rowCopy}>
+              <Text numberOfLines={2} style={styles.rowTitle}>{card.prompt}</Text>
+              <Text style={styles.meta}>
+                {card.deckTitle}{card.evidence ? ` · ${card.evidence.sourceTitle} · ${card.evidence.locator}` : ' · no source evidence'}
+              </Text>
+              {card.qualityNotes ? <Text style={styles.reviewNote}>{card.qualityNotes}</Text> : null}
+            </View>
+            <AppButton icon="open-outline" label="Open set" variant="secondary" onPress={() => router.push({ pathname: '/deck/[id]', params: { id: card.deckId } })} />
+            <AppButton
+              disabled={actionId === card.id}
+              icon="play-circle-outline"
+              label={actionId === card.id ? 'Restoring…' : 'Allow study'}
+              variant="quiet"
+              onPress={() => void runAction(card.id, () => restoreCardFromSourceReview(card.id))}
+            />
+          </View>
+        ))}
+      </LibrarySection>
 
       <LibrarySection
         body="Cards with eight or more lapses are flagged for a Builder rewrite. Pausing one protects the learner while its wording or source is checked."
@@ -142,7 +183,8 @@ export default function ManageLibraryScreen() {
           </View>
         ))}
       </LibrarySection>
-    </ScrollView>
+      </ScrollView>
+    </AppShell>
   );
 }
 
@@ -198,11 +240,13 @@ const styles = StyleSheet.create({
   rowCopy: { flex: 1, gap: 4, minWidth: 190 },
   rowIcon: { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: 12, height: 44, justifyContent: 'center', width: 44 },
   rowTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 14, lineHeight: 20 },
+  reviewNote: { color: '#9a5b09', fontFamily: fonts.semibold, fontSize: 11, lineHeight: 17 },
   section: { gap: 10 },
   sectionCopy: { flex: 1, gap: 3 },
   sectionHeading: { alignItems: 'flex-start', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   sectionTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 19 },
   sectionTitleRow: { alignItems: 'flex-start', flex: 1, flexDirection: 'row', gap: 9 },
+  sourceCheckIcon: { backgroundColor: colors.warningSurface },
   title: { color: colors.ink, fontFamily: fonts.extraBold, fontSize: 25, lineHeight: 32 },
   trashIcon: { backgroundColor: colors.dangerSurface },
   warningIcon: { backgroundColor: colors.warningSurface },

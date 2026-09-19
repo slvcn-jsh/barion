@@ -1,21 +1,15 @@
 import { StyleSheet, Text, View } from 'react-native';
 
+import { learnerAnswer, parseAnswerSections } from '@/cards/answerView';
 import { colors, fonts, radii } from '@/theme/colors';
-
-type AnswerSection = {
-  label?: string;
-  body: string;
-};
 
 type Props = {
   answer: string;
   variant?: 'study' | 'preview' | 'candidate';
 };
 
-const KNOWN_LABELS = new Set(['answer', 'why it matters', 'source linked', 'study note']);
-
 export function StructuredAnswer({ answer, variant = 'preview' }: Props) {
-  const sections = parseAnswerSections(answer);
+  const sections = parseAnswerSections(variant === 'study' ? learnerAnswer(answer) : answer);
   const study = variant === 'study';
   const candidate = variant === 'candidate';
 
@@ -34,29 +28,6 @@ export function StructuredAnswer({ answer, variant = 'preview' }: Props) {
       ))}
     </View>
   );
-}
-
-export function parseAnswerSections(answer: string): AnswerSection[] {
-  const lines = answer
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const sections = lines.map((line) => {
-    const match = line.match(/^([A-Za-z][A-Za-z ]{1,42}):\s*(.+)$/);
-    if (!match) {
-      return { body: line };
-    }
-
-    const label = match[1].trim();
-    if (!KNOWN_LABELS.has(label.toLowerCase())) {
-      return { body: line };
-    }
-
-    return { label, body: match[2].trim() };
-  });
-
-  return sections.length ? sections : [{ body: answer.trim() }];
 }
 
 const styles = StyleSheet.create({

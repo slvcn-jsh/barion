@@ -1,6 +1,7 @@
 import {
   buildImportedCardsForRow,
   exportCardsToCsv,
+  exportCardsToTsv,
   parseCardImportText,
 } from '@/cards/importExport';
 
@@ -49,8 +50,9 @@ describe('card import/export helpers', () => {
     const cards = buildImportedCardsForRow(row);
     expect(cards).toHaveLength(2);
     expect(cards[0].prompt).toContain('[...]');
-    expect(cards[0].answer).toContain('Answer: hyperandrogenism');
-    expect(cards[1].answer).toContain('Answer: ovulatory dysfunction');
+    expect(cards[0].answer).toContain('hyperandrogenism');
+    expect(cards[0].answer).not.toContain('Why it matters:');
+    expect(cards[1].answer).toContain('ovulatory dysfunction');
   });
 
   it('exports portable CSV with escaped cells', () => {
@@ -65,5 +67,14 @@ describe('card import/export helpers', () => {
 
     expect(csv).toContain('"Drug, class"');
     expect(csv).toContain('"Answer with ""quoted"" detail"');
+  });
+
+  it('exports Quizlet-compatible tab-separated cards without losing embedded tabs', () => {
+    const tsv = exportCardsToTsv([
+      { prompt: 'ACE inhibitor', answer: 'Blocks\tACE', cardType: 'mechanism', deckTitle: 'Cardiology' },
+    ]);
+
+    expect(tsv.split('\n')[0]).toBe('Front\tBack\tType\tDeck');
+    expect(tsv).toContain('"Blocks\tACE"');
   });
 });

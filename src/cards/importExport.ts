@@ -1,3 +1,5 @@
+import { learnerAnswer } from '@/cards/answerView';
+
 export type CardImportFieldSeparator = 'tab' | 'comma' | 'semicolon' | 'pipe' | 'custom';
 
 export type CardImportCardSeparator = 'newline' | 'blank-line' | 'semicolon' | 'custom';
@@ -81,13 +83,7 @@ export function buildImportedCardsForRow(row: CardImportReadyRow): ImportedCardP
     const fullStatement = stripClozeMarkup(row.front);
     return clozeGroups.map((group) => ({
       prompt: `Complete: ${buildClozePrompt(row.front, group.index)}`,
-      answer: [
-        `Answer: ${group.answers.join('; ')}`,
-        row.back
-          ? `Why it matters: ${row.back}`
-          : 'Why it matters: Recall the hidden concept in context before checking the answer.',
-        `Study note: ${fullStatement}`,
-      ].join('\n'),
+      answer: row.back.trim() ? `${group.answers.join('; ')} — ${fullStatement}. ${row.back.trim()}` : group.answers.join('; '),
       cardType: 'cloze',
     }));
   }
@@ -104,14 +100,29 @@ export function buildImportedCardsForRow(row: CardImportReadyRow): ImportedCardP
 export function exportCardsToCsv(
   rows: { prompt: string; answer: string; cardType: string; deckTitle?: string }[],
 ) {
+  return exportCardsToDelimited(rows, ',');
+}
+
+export function exportCardsToTsv(
+  rows: { prompt: string; answer: string; cardType: string; deckTitle?: string }[],
+) {
+  return exportCardsToDelimited(rows, '\t');
+}
+
+function exportCardsToDelimited(
+  rows: { prompt: string; answer: string; cardType: string; deckTitle?: string }[],
+  separator: ',' | '\t',
+) {
   const header = ['Front', 'Back', 'Type', 'Deck'];
   const body = rows.map((row) => [
     row.prompt,
-    row.answer,
+    learnerAnswer(row.answer),
     row.cardType,
     row.deckTitle ?? '',
   ]);
-  return [header, ...body].map((line) => line.map(escapeCsvCell).join(',')).join('\n');
+  return [header, ...body]
+    .map((line) => line.map((value) => escapeDelimitedCell(value, separator)).join(separator))
+    .join('\n');
 }
 
 export function stripClozeMarkup(value: string) {
@@ -339,8 +350,8 @@ function resolveDisplayJoiner(defaultCardType: string) {
   return defaultCardType === 'cloze' ? ' ' : ', ';
 }
 
-function escapeCsvCell(value: string) {
+function escapeDelimitedCell(value: string, separator: ',' | '\t') {
   const normalized = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  if (!/[",\n]/.test(normalized)) return normalized;
+  if (!normalized.includes(separator) && !/["\n]/.test(normalized)) return normalized;
   return `"${normalized.replace(/"/g, '""')}"`;
 }

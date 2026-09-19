@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AppShell } from '@/components/AppShell';
 import { LoadingState } from '@/components/ScreenState';
 import type {
   EvidenceDisplay,
@@ -59,7 +60,8 @@ export default function ProfileScreen() {
   if (!profile) return <LoadingState label="Loading Study Profile" />;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <AppShell active="more">
+      <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.hero}>
         <View style={styles.heroIcon}><Ionicons name="options" size={25} color={colors.surface} /></View>
         <View style={styles.heroCopy}>
@@ -117,9 +119,9 @@ export default function ProfileScreen() {
 
       <ProfileSection title="Study days" body="Autopilot uses these for gentle pacing and optional reminders. Due work remains available whenever you open Barion.">
         <View style={styles.dayRow}>
-          {DAY_LABELS.map((label, day) => {
-            const selected = profile.weeklyStudyDays.includes(day);
-            return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={label} onPress={() => { const days = selected ? profile.weeklyStudyDays.filter((value) => value !== day) : [...profile.weeklyStudyDays, day]; void choose({ weeklyStudyDays: days }); }} style={[styles.dayChoice, selected && styles.dayChoiceSelected]}><Text style={[styles.dayText, selected && styles.dayTextSelected]}>{label}</Text></Pressable>;
+          {DAY_CHOICES.map((choice) => {
+            const selected = profile.weeklyStudyDays.includes(choice.value);
+            return <Pressable accessibilityLabel={choice.accessibilityLabel} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={choice.value} onPress={() => { const days = selected ? profile.weeklyStudyDays.filter((value) => value !== choice.value) : [...profile.weeklyStudyDays, choice.value]; void choose({ weeklyStudyDays: days }) }} style={[styles.dayChoice, selected && styles.dayChoiceSelected]}><Text style={[styles.dayText, selected && styles.dayTextSelected]}>{choice.label}</Text></Pressable>;
           })}
         </View>
       </ProfileSection>
@@ -143,7 +145,8 @@ export default function ProfileScreen() {
         <Ionicons name="shield-checkmark-outline" size={21} color={colors.tealDark} />
         <Text style={styles.noteText}>These settings stay in the local Barion library. They do not diagnose a learning style or change source facts.</Text>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </AppShell>
   );
 }
 
@@ -213,7 +216,15 @@ const REVIEW_LIMITS: Choice<number>[] = [
   { value: 20, label: '20', detail: 'Light' }, { value: 40, label: '40', detail: 'Balanced', recommended: true },
   { value: 80, label: '80', detail: 'Intensive' }, { value: 0, label: '∞', detail: 'Unlimited' },
 ];
-const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const DAY_CHOICES = [
+  { value: 0, label: 'S', accessibilityLabel: 'Sunday' },
+  { value: 1, label: 'M', accessibilityLabel: 'Monday' },
+  { value: 2, label: 'T', accessibilityLabel: 'Tuesday' },
+  { value: 3, label: 'W', accessibilityLabel: 'Wednesday' },
+  { value: 4, label: 'T', accessibilityLabel: 'Thursday' },
+  { value: 5, label: 'F', accessibilityLabel: 'Friday' },
+  { value: 6, label: 'S', accessibilityLabel: 'Saturday' },
+];
 const REMINDER_STATE: Choice<'on' | 'off'>[] = [
   { value: 'off', label: 'Off', detail: 'Open Barion on your own schedule.' },
   { value: 'on', label: 'On', detail: 'A quiet local reminder on selected days.', recommended: true },

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { EvidenceDisplay, ReviewStyle, StudyCard } from '@/domain/types';
+import { cardTrustSummary } from '@/cards/trust';
 import { StructuredAnswer } from '@/components/StructuredAnswer';
 import { colors, fonts, radii } from '@/theme/colors';
 
@@ -14,8 +15,9 @@ type Props = {
   onFlip: () => void;
 };
 
-export function FlipStudyCard({ card, revealed, evidenceDisplay = 'compact', reviewStyle = 'clinical-reasoning', onFlip }: Props) {
+export function FlipStudyCard({ card, revealed, onFlip }: Props) {
   const flip = useRef(new Animated.Value(revealed ? 1 : 0)).current;
+  const trust = cardTrustSummary(card);
 
   useEffect(() => {
     Animated.spring(flip, {
@@ -65,7 +67,7 @@ export function FlipStudyCard({ card, revealed, evidenceDisplay = 'compact', rev
                 {card.deckTitle}
               </Text>
             </View>
-            <Text style={styles.sideLabel}>Question</Text>
+            {trust.tone === 'review' ? <TrustPill label={trust.label} tone={trust.tone} /> : null}
           </View>
 
           <View style={styles.centerContent}>
@@ -76,7 +78,6 @@ export function FlipStudyCard({ card, revealed, evidenceDisplay = 'compact', rev
 
           {card.weakScore ? <View style={styles.weakBadge}><Ionicons name="fitness-outline" size={15} color={colors.coral} /><Text style={styles.weakBadgeText}>Repair priority</Text></View> : null}
 
-          <SourceLine card={card} />
         </Animated.View>
 
         <Animated.View
@@ -95,37 +96,14 @@ export function FlipStudyCard({ card, revealed, evidenceDisplay = 'compact', rev
             <View style={styles.deckChip}>
               <Ionicons name="checkmark-circle-outline" size={17} color={colors.green} />
               <Text numberOfLines={1} style={styles.deckChipText}>
-                {card.cardType}
+                Answer
               </Text>
             </View>
-            <Text style={styles.sideLabel}>Answer</Text>
+            {trust.tone === 'review' ? <TrustPill label={trust.label} tone={trust.tone} /> : null}
           </View>
 
           <View style={styles.answerContent}>
-            <StructuredAnswer answer={reviewStyle === 'concise' ? conciseAnswer(card.answer) : card.answer} variant="study" />
-          </View>
-
-          <View style={styles.evidenceArea}>
-            <View style={styles.evidenceHeader}>
-              <Ionicons
-                name={card.evidence ? 'document-text-outline' : 'create-outline'}
-                size={17}
-                color={card.evidence ? colors.teal : colors.coral}
-              />
-              <Text style={styles.evidenceTitle}>
-                {card.evidence ? card.evidence.sourceTitle : 'Manual card'}
-              </Text>
-            </View>
-            {card.evidence ? (
-              <>
-                <Text style={styles.evidenceLocator}>{card.evidence.locator}</Text>
-                <Text numberOfLines={evidenceDisplay === 'expanded' ? undefined : 4} style={styles.evidenceText}>
-                  {card.evidence.text}
-                </Text>
-              </>
-            ) : (
-              <Text style={styles.evidenceText}>No source evidence has been attached yet.</Text>
-            )}
+            <StructuredAnswer answer={card.answer} variant="study" />
           </View>
         </Animated.View>
       </View>
@@ -133,28 +111,36 @@ export function FlipStudyCard({ card, revealed, evidenceDisplay = 'compact', rev
   );
 }
 
-function conciseAnswer(answer: string) {
-  return answer.split(/\n+/).find((line) => /^answer:/i.test(line.trim())) ?? answer.split(/\n+/)[0] ?? answer;
-}
-
-function SourceLine({ card }: { card: StudyCard }) {
-  if (!card.evidence) {
-    return (
-      <View style={styles.sourceLine}>
-        <Ionicons name="create-outline" size={16} color={colors.coral} />
-        <Text numberOfLines={1} style={styles.sourceLineText}>
-          Manual card
-        </Text>
-      </View>
-    );
-  }
+function TrustPill({ label, tone }: { label: string; tone: ReturnType<typeof cardTrustSummary>['tone'] }) {
+  const style =
+    tone === 'verified'
+      ? styles.trustVerified
+      : tone === 'review'
+        ? styles.trustReview
+        : tone === 'manual'
+          ? styles.trustManual
+          : styles.trustSource;
+  const textStyle =
+    tone === 'verified'
+      ? styles.trustVerifiedText
+      : tone === 'review'
+        ? styles.trustReviewText
+        : tone === 'manual'
+          ? styles.trustManualText
+          : styles.trustSourceText;
+  const icon =
+    tone === 'verified'
+      ? 'shield-checkmark-outline'
+      : tone === 'review'
+        ? 'alert-circle-outline'
+        : tone === 'manual'
+          ? 'create-outline'
+          : 'link-outline';
 
   return (
-    <View style={styles.sourceLine}>
-      <Ionicons name="link-outline" size={16} color={colors.tealDark} />
-      <Text numberOfLines={1} style={styles.sourceLineText}>
-        {card.evidence.sourceTitle} - {card.evidence.locator}
-      </Text>
+    <View style={[styles.trustPill, style]}>
+      <Ionicons name={icon} size={14} color={textStyle.color} />
+      <Text numberOfLines={1} style={[styles.trustPillText, textStyle]}>{label}</Text>
     </View>
   );
 }
@@ -203,35 +189,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 12,
   },
-  evidenceArea: {
-    borderTopColor: colors.line,
-    borderTopWidth: 1,
-    gap: 6,
-    paddingTop: 14,
-  },
-  evidenceHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 7,
-  },
-  evidenceLocator: {
-    color: colors.muted,
-    fontFamily: fonts.bold,
-    fontSize: 12,
-    textTransform: 'uppercase',
-  },
-  evidenceText: {
-    color: colors.ink,
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  evidenceTitle: {
-    color: colors.ink,
-    flex: 1,
-    fontFamily: fonts.bold,
-    fontSize: 13,
-  },
   face: {
     backfaceVisibility: 'hidden',
     borderColor: colors.line,
@@ -263,33 +220,19 @@ const styles = StyleSheet.create({
     lineHeight: 39,
     textAlign: 'center',
   },
-  sideLabel: {
-    color: colors.muted,
-    fontFamily: fonts.bold,
-    fontSize: 12,
-    letterSpacing: 0,
-    textTransform: 'uppercase',
-  },
-  sourceLine: {
-    alignItems: 'center',
-    alignSelf: 'center',
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 7,
-    maxWidth: '100%',
-    minHeight: 38,
-    paddingHorizontal: 13,
-  },
-  sourceLineText: {
-    color: colors.tealDark,
-    flexShrink: 1,
-    fontFamily: fonts.bold,
-    fontSize: 12,
-  },
   stage: {
     minHeight: 430,
   },
+  trustManual: { backgroundColor: colors.dangerSurface },
+  trustManualText: { color: colors.coral },
+  trustPill: { alignItems: 'center', borderRadius: radii.pill, flexDirection: 'row', gap: 5, maxWidth: 190, minHeight: 30, paddingHorizontal: 9 },
+  trustPillText: { fontFamily: fonts.bold, fontSize: 10, textTransform: 'uppercase' },
+  trustReview: { backgroundColor: colors.warningSurface },
+  trustReviewText: { color: '#9a5b09' },
+  trustSource: { backgroundColor: colors.surfaceTeal },
+  trustSourceText: { color: colors.tealDark },
+  trustVerified: { backgroundColor: '#eaf8f2' },
+  trustVerifiedText: { color: colors.green },
   weakBadge: { alignItems: 'center', alignSelf: 'center', backgroundColor: colors.dangerSurface, borderRadius: radii.pill, flexDirection: 'row', gap: 6, marginBottom: 9, paddingHorizontal: 10, paddingVertical: 6 },
   weakBadgeText: { color: colors.coral, fontFamily: fonts.bold, fontSize: 10, textTransform: 'uppercase' },
 });

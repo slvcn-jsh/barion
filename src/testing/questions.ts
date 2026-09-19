@@ -1,4 +1,5 @@
-import type { StudyCard, StudyDifficulty, TestFormat, TestQuestion } from '@/domain/types';
+import { learnerAnswer } from '@/cards/answerView';
+import type { StudyCard, StudyDifficulty, TestDirection, TestFormat, TestQuestion } from '@/domain/types';
 
 const CLINICAL_TYPES = /clinical|contraindication|treatment|risk|diagnostic|mechanism/i;
 const LIST_PATTERN = /[,;]|\band\b/i;
@@ -17,6 +18,7 @@ export function buildTestQuestions(
   cards: StudyCard[],
   format: TestFormat,
   difficulty: StudyDifficulty,
+  direction: TestDirection = 'front-to-back',
 ): TestQuestion[] {
   const ordered = [...cards].sort((left, right) => {
     if (format === 'adaptive') return (right.weakScore ?? 0) - (left.weakScore ?? 0);
@@ -25,23 +27,26 @@ export function buildTestQuestions(
     }
     return 0;
   });
-  const answerPool = uniqueCandidates(
-    ordered.map((card) => {
-      const answer = directAnswer(card.answer);
-      return { answer, card, shape: answerShape(answer) };
-    }),
-  );
-
   return ordered.map((card, index) => {
-    const correctAnswer = directAnswer(card.answer);
+    const reverse = shouldReverse(direction, card, index);
+    const correctAnswer = reverse ? card.prompt.trim() : directAnswer(card.answer);
+    const prompt = reverse ? directAnswer(card.answer) : card.prompt;
     const correct: AnswerCandidate = { answer: correctAnswer, card, shape: answerShape(correctAnswer) };
+    const answerPool = uniqueCandidates(
+      ordered.map((candidateCard) => {
+        const answer = reverse ? candidateCard.prompt.trim() : directAnswer(candidateCard.answer);
+        return { answer, card: candidateCard, shape: answerShape(answer) };
+      }),
+    );
     const compatiblePool = answerPool.filter((candidate) => isCompatibleDistractor(correct, candidate));
     const distractors = deterministicPick(compatiblePool, 3, hash(`${card.id}:${index}`));
+    const trueFalse = maybeTrueFalseQuestion(card, prompt, correctAnswer, reverse, format, difficulty, index, compatiblePool);
+    if (trueFalse) return trueFalse;
 
     // Recognition is only useful when every option is the same kind of answer.
     // Otherwise Barion uses written recall instead of producing a misleading medical MCQ.
     if (distractors.length < 3 || (difficulty === 'challenging' && index % 2 === 0)) {
-      return writtenQuestion(card, correctAnswer);
+      return writtenQuestion(card, prompt, correctAnswer, reverse);
     }
 
     const correctIndex = hash(card.id) % 4;
@@ -53,23 +58,67 @@ export function buildTestQuestions(
       id: `question-${card.id}`,
       card,
       type: 'multiple-choice',
-      prompt: card.prompt,
+      prompt,
       options,
       correctOptionId: options[correctIndex].id,
       correctAnswer,
+      direction: reverse ? 'back-to-front' : 'front-to-back',
     };
   });
 }
 
-function writtenQuestion(card: StudyCard, correctAnswer: string): TestQuestion {
+function maybeTrueFalseQuestion(
+  card: StudyCard,
+  prompt: string,
+  correctAnswer: string,
+  reverse: boolean,
+  format: TestFormat,
+  difficulty: StudyDifficulty,
+  index: number,
+  compatiblePool: AnswerCandidate[],
+): TestQuestion | null {
+  if (format !== 'clinical' || difficulty === 'challenging' || reverse) return null;
+  if (!CLINICAL_TYPES.test(card.cardType) || index % 3 !== 1) return null;
+
+  const falseCandidate = deterministicPick(compatiblePool, 1, hash(`${card.id}:${index}:true-false`))[0];
+  const useCorrectProposal = !falseCandidate || hash(`${card.id}:truth`) % 2 === 0;
+  const proposedAnswer = useCorrectProposal ? correctAnswer : falseCandidate.answer;
+  const correctOptionId = useCorrectProposal ? `${card.id}-tf-correct` : `${card.id}-tf-not-correct`;
+
   return {
-    id: `question-${card.id}`,
+    id: `question-${card.id}-true-false`,
+    card,
+    type: 'true-false',
+    prompt,
+    proposedAnswer,
+    options: [
+      { id: `${card.id}-tf-correct`, label: 'Correct' },
+      { id: `${card.id}-tf-not-correct`, label: 'Not correct' },
+    ],
+    correctOptionId,
+    correctAnswer,
+    direction: 'front-to-back',
+  };
+}
+
+function writtenQuestion(card: StudyCard, prompt: string, correctAnswer: string, reverse: boolean): TestQuestion {
+  return {
+    id: `question-${card.id}-${reverse ? 'reverse' : 'forward'}`,
     card,
     type: 'written-recall',
-    prompt: card.prompt,
+    prompt,
     options: [],
     correctAnswer,
+    direction: reverse ? 'back-to-front' : 'front-to-back',
   };
+}
+
+function shouldReverse(direction: TestDirection, card: StudyCard, index: number) {
+  if (direction === 'back-to-front') return true;
+  if (direction === 'front-to-back') return false;
+  const suitable = /definition|term|classification|anatomy|cloze/i.test(card.cardType)
+    || (wordCount(card.prompt) <= 12 && wordCount(directAnswer(card.answer)) <= 14);
+  return suitable && (hash(`${card.id}:${index}:direction`) % 2 === 1);
 }
 
 function isCompatibleDistractor(correct: AnswerCandidate, candidate: AnswerCandidate) {
@@ -113,11 +162,7 @@ function normalizeCardType(value: string) {
 }
 
 function directAnswer(answer: string) {
-  const answerLine = answer
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .find((line) => /^answer:/i.test(line));
-  return (answerLine?.replace(/^answer:\s*/i, '') || answer.split(/\n+/)[0] || answer).trim();
+  return learnerAnswer(answer);
 }
 
 function deterministicPick(values: AnswerCandidate[], count: number, seed: number) {

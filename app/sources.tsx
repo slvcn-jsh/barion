@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton } from '@/components/AppButton';
+import { AppShell } from '@/components/AppShell';
 import { LoadingState } from '@/components/ScreenState';
 import { SourceStatusPill } from '@/components/SourceStatusPill';
 import type { SourceItem } from '@/domain/types';
@@ -66,7 +67,8 @@ export default function SourcesScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <AppShell active="add">
+      <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.intro}>
         <View style={styles.introIcon}>
           <Ionicons name="library-outline" size={26} color={colors.blue} />
@@ -168,9 +170,19 @@ export default function SourcesScreen() {
               <View style={styles.sourceFacts}>
                 <Text style={styles.sourceMeta}>{source.sourceCardCount} cards</Text>
                 <View style={styles.factDot} />
-                <Text style={styles.sourceMeta}>
-                  {source.draftCount ? `${source.draftCount} need attention` : 'Independent study set'}
+                <Text style={[styles.sourceMeta, source.needsReviewCardCount ? styles.sourceMetaWarning : null]}>
+                  {source.needsReviewCardCount
+                    ? `${source.needsReviewCardCount} source checks`
+                    : source.draftCount
+                      ? `${source.draftCount} need attention`
+                      : 'Independent study set'}
                 </Text>
+                {source.verifiedCardCount ? (
+                  <>
+                    <View style={styles.factDot} />
+                    <Text style={styles.sourceMeta}>{source.verifiedCardCount} verified</Text>
+                  </>
+                ) : null}
                 {source.sizeBytes ? (
                   <>
                     <View style={styles.factDot} />
@@ -184,7 +196,8 @@ export default function SourcesScreen() {
           </Pressable>
         ))}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </AppShell>
   );
 }
 
@@ -243,6 +256,7 @@ const styles = StyleSheet.create({
   sourceIcon: { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: 14, height: 50, justifyContent: 'center', width: 50 },
   sourceIssue: { color: colors.red, fontFamily: fonts.medium, fontSize: 11, lineHeight: 17 },
   sourceMeta: { color: colors.muted, fontFamily: fonts.medium, fontSize: 11 },
+  sourceMetaWarning: { color: '#9a5b09', fontFamily: fonts.bold },
   sourceRow: { alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, flexDirection: 'row', gap: 13, padding: 15 },
   sourceRowPressed: { opacity: 0.78, transform: [{ scale: 0.995 }] },
   sourceText: { flex: 1, gap: 5, minWidth: 0 },

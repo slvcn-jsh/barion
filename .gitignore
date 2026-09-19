@@ -38,6 +38,7 @@ app/reference/*.zip
 
 # local env files
 .env*.local
+.env.eas-simulator
 
 # typescript
 *.tsbuildinfo

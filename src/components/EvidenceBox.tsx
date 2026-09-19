@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { cardTrustSummary } from '@/cards/trust';
 import type { EvidenceSnippet } from '@/domain/types';
 import { colors, fonts, radii } from '@/theme/colors';
 
@@ -10,45 +11,36 @@ type Props = {
 
 export function EvidenceBox({ evidence }: Props) {
   if (!evidence) {
+    const trust = cardTrustSummary({});
     return (
       <View style={styles.box}>
         <View style={styles.header}>
           <Ionicons name="alert-circle-outline" size={18} color={colors.coral} />
-          <Text style={styles.title}>No source link</Text>
+          <Text style={styles.title}>{trust.label}</Text>
         </View>
-        <Text style={styles.text}>Manual card without bound evidence.</Text>
+        <Text style={styles.text}>{trust.detail}</Text>
       </View>
     );
   }
 
-  const status = describeEvidenceStatus(evidence.verificationStatus);
+  const trust = cardTrustSummary({ evidence });
+  const toneStyle = styles[`${trust.tone}Support`];
 
   return (
-    <View style={styles.box}>
+    <View style={[styles.box, trust.tone === 'review' && styles.reviewBox]}>
       <View style={styles.header}>
-        <Ionicons name="document-text-outline" size={18} color={colors.teal} />
+        <Ionicons
+          name={trust.tone === 'review' ? 'alert-circle-outline' : 'document-text-outline'}
+          size={18}
+          color={toneStyle.color}
+        />
         <Text style={styles.title}>{evidence.sourceTitle}</Text>
       </View>
       <Text style={styles.locator}>{evidence.locator}</Text>
       <Text style={styles.text}>{evidence.text}</Text>
-      <Text style={styles.support}>
-        {status} - {Math.round(evidence.supportScore * 100)}% source support
-      </Text>
+      <Text style={[styles.support, toneStyle]}>{trust.label} - {trust.detail}</Text>
     </View>
   );
-}
-
-function describeEvidenceStatus(status: string) {
-  if (
-    status === 'auto-published-extractive' ||
-    status === 'user-approved-extractive' ||
-    status === 'extractive-source-match'
-  ) {
-    return 'Source linked';
-  }
-  if (status === 'built-in-curated-demo') return 'Built-in source';
-  if (status === 'user-approved-edited' || status === 'user-edited') return 'Edited source link';
-  return 'Needs source review';
 }
 
 const styles = StyleSheet.create({
@@ -70,8 +62,20 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 13,
   },
+  manualSupport: {
+    color: colors.coral,
+  },
+  reviewBox: {
+    backgroundColor: colors.warningSurface,
+    borderColor: '#efd59f',
+  },
+  reviewSupport: {
+    color: '#9a5b09',
+  },
+  sourceSupport: {
+    color: colors.tealDark,
+  },
   support: {
-    color: colors.green,
     fontFamily: fonts.bold,
     fontSize: 12,
     textTransform: 'uppercase',
@@ -87,5 +91,8 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: fonts.bold,
     fontSize: 14,
+  },
+  verifiedSupport: {
+    color: colors.green,
   },
 });

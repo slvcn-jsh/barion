@@ -13,7 +13,7 @@ export default function NewDeckScreen() {
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function save(next: 'import' | 'empty') {
     if (!title.trim()) {
       Alert.alert('Deck needs a title', 'Name the deck before saving.');
       return;
@@ -23,7 +23,11 @@ export default function NewDeckScreen() {
     try {
       await initializeDatabase();
       const deckId = await createDeck({ title, description, moduleId: params.moduleId });
-      router.replace({ pathname: '/deck/[id]', params: { id: deckId } });
+      if (next === 'import') {
+        router.replace({ pathname: '/card/new', params: { deckId, mode: 'bulk' } });
+      } else {
+        router.replace({ pathname: '/deck/[id]', params: { id: deckId } });
+      }
     } catch (error) {
       Alert.alert('Unable to save deck', error instanceof Error ? error.message : 'Please try again.');
     } finally {
@@ -63,13 +67,21 @@ export default function NewDeckScreen() {
           />
         </View>
 
-        <AppButton disabled={saving} label={saving ? 'Saving' : 'Save Deck'} icon="save-outline" onPress={save} />
+        <View style={styles.actions}>
+          <AppButton disabled={saving} label={saving ? 'Creating' : 'Create & import cards'} icon="cloud-upload-outline" onPress={() => void save('import')} />
+          <AppButton disabled={saving} label="Create empty deck" icon="albums-outline" variant="secondary" onPress={() => void save('empty')} />
+        </View>
       </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
   container: {
     marginHorizontal: 'auto',
     maxWidth: 720,

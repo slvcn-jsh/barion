@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AppButton } from '@/components/AppButton';
-import { EvidenceBox } from '@/components/EvidenceBox';
+import { AppShell } from '@/components/AppShell';
 import { LoadingState } from '@/components/ScreenState';
 import { StructuredAnswer } from '@/components/StructuredAnswer';
 import type {
@@ -14,6 +14,7 @@ import type {
   StudyCard,
   StudyProfile,
   TestConfidence,
+  TestDirection,
   TestFormat,
   TestQuestion,
   TestScope,
@@ -37,16 +38,26 @@ type Phase = 'setup' | 'testing' | 'results';
 type Feedback = { question: TestQuestion; correct: boolean; confidence: TestConfidence };
 
 export default function TestScreen() {
-  const params = useLocalSearchParams<{ deckId?: string; moduleId?: string; scope?: string }>();
+  const params = useLocalSearchParams<{
+    deckId?: string;
+    moduleId?: string;
+    scope?: string;
+    format?: string;
+    direction?: string;
+    limit?: string;
+    autoStart?: string;
+  }>();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [profile, setProfile] = useState<StudyProfile | null>(null);
   const [phase, setPhase] = useState<Phase>('setup');
   const [deckId, setDeckId] = useState(params.deckId || 'all');
   const [moduleId, setModuleId] = useState(params.moduleId || '');
-  const [scope, setScope] = useState<TestScope>(params.scope === 'weak' ? 'weak' : 'due');
-  const [format, setFormat] = useState<TestFormat>('adaptive');
-  const [questionLimit, setQuestionLimit] = useState(10);
+  const [scope, setScope] = useState<TestScope>(parseScope(params.scope));
+  const [format, setFormat] = useState<TestFormat>(parseFormat(params.format));
+  const [direction, setDirection] = useState<TestDirection>(parseDirection(params.direction));
+  const [questionLimit, setQuestionLimit] = useState(parseLimit(params.limit) ?? 10);
+  const [customLimit, setCustomLimit] = useState('');
   const [questions, setQuestions] = useState<TestQuestion[]>([]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -59,6 +70,7 @@ export default function TestScreen() {
   const [busy, setBusy] = useState(false);
   const [questionStartedAt, setQuestionStartedAt] = useState(Date.now());
   const [resumableSession, setResumableSession] = useState<ActiveTestSession | null>(null);
+  const [autoStarted, setAutoStarted] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -75,12 +87,20 @@ export default function TestScreen() {
         setCourses(nextCourses);
         setProfile(nextProfile);
         setResumableSession(activeSession);
-        setQuestionLimit(nextProfile.sessionLength || 20);
-        setFormat(nextProfile.examGoal === 'board-style' || nextProfile.examGoal === 'clinical-recall' ? 'clinical' : 'adaptive');
+        if (!params.limit) setQuestionLimit(nextProfile.sessionLength || 20);
+        if (!params.format) {
+          setFormat(nextProfile.examGoal === 'board-style' || nextProfile.examGoal === 'clinical-recall' ? 'clinical' : 'adaptive');
+        }
       });
       return () => { active = false; };
     }, []),
   );
+
+  useEffect(() => {
+    if (!dashboard || !profile || autoStarted || params.autoStart !== '1' || phase !== 'setup') return;
+    setAutoStarted(true);
+    void beginTest();
+  }, [autoStarted, dashboard, params.autoStart, phase, profile]);
 
   const current = questions[questionIndex];
   const progress = questions.length ? questionIndex / questions.length : 0;
@@ -104,10 +124,11 @@ export default function TestScreen() {
         );
         return;
       }
-      const nextQuestions = buildTestQuestions(cards, format, profile.difficulty);
+      const nextQuestions = buildTestQuestions(cards, format, profile.difficulty, direction);
       const nextSessionId = await startTestSession({
         deckId: moduleId ? undefined : deckId === 'all' ? undefined : deckId,
         format,
+        direction,
         scope,
         questionLimit,
         questions: nextQuestions,
@@ -134,7 +155,9 @@ export default function TestScreen() {
     setModuleId('');
     setScope(resumableSession.scope);
     setFormat(resumableSession.format);
+    setDirection(resumableSession.direction);
     setQuestionLimit(resumableSession.questionLimit);
+    setCustomLimit([0, 5, 10, 20].includes(resumableSession.questionLimit) ? '' : String(resumableSession.questionLimit));
     setQuestions(resumableSession.questions);
     setSessionId(resumableSession.id);
     setQuestionIndex(Math.min(resumableSession.answeredCount, resumableSession.questions.length - 1));
@@ -209,7 +232,13 @@ export default function TestScreen() {
     setFeedback(null);
   }
 
-  if (!dashboard || !profile) return <LoadingState label="Preparing Test Mode" />;
+  if (!dashboard || !profile) {
+    return (
+      <AppShell active="study">
+        <LoadingState label="Preparing Test Mode" />
+      </AppShell>
+    );
+  }
 
   function chooseTarget(nextDeckId: string, nextModuleId = '') {
     setDeckId(nextDeckId);
@@ -218,13 +247,14 @@ export default function TestScreen() {
 
   if (phase === 'setup') {
     return (
+      <AppShell active="study">
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.hero}>
           <View style={styles.heroIcon}><Ionicons name="school" size={27} color={colors.surface} /></View>
           <View style={styles.heroCopy}>
             <Text style={styles.eyebrow}>ACTIVE RECALL · SOURCE GROUNDED</Text>
-            <Text style={styles.heroTitle}>Build a focused test</Text>
-            <Text style={styles.heroBody}>Barion grades recognition safely, lets you self-mark written recall, and sends misses back to FSRS automatically.</Text>
+            <Text style={styles.heroTitle}>{params.autoStart === '1' ? 'Building practice questions' : 'Build a focused test'}</Text>
+            <Text style={styles.heroBody}>Barion mixes written recall, best-answer recognition, and proposed-answer checks, then sends misses back to FSRS automatically.</Text>
           </View>
         </View>
 
@@ -271,7 +301,7 @@ export default function TestScreen() {
           </View>
         </SetupSection>
 
-        <SetupSection title="Test style" body="Questions always remain tied to the source answer and evidence.">
+        <SetupSection title="Test style" body="Barion chooses the cleanest recall format for the selected material.">
           <View style={styles.choiceGrid}>
             <Choice selected={format === 'adaptive'} label="Adaptive mix" detail="Weak and due concepts first" recommended onPress={() => setFormat('adaptive')} />
             <Choice selected={format === 'clinical'} label="Clinical focus" detail="Mechanism, findings, treatment, safety" onPress={() => setFormat('clinical')} />
@@ -279,20 +309,45 @@ export default function TestScreen() {
           </View>
         </SetupSection>
 
-        <SetupSection title="Length" body={`Your Study Profile target is ${profile.sessionLength || 'unlimited'} cards.`}>
-          <View style={styles.compactChoices}>
-            {[5, 10, 20, 0].map((count) => <SmallChoice key={count} selected={questionLimit === count} label={count || 'All'} onPress={() => setQuestionLimit(count)} />)}
+        <SetupSection title="Answer direction" body="Automatic both reverses only cards whose two sides make a clear prompt and answer.">
+          <View style={styles.choiceGrid}>
+            <Choice selected={direction === 'both'} label="Automatic both" detail="Varied recall when the card is suitable" recommended onPress={() => setDirection('both')} />
+            <Choice selected={direction === 'front-to-back'} label="Front to back" detail="Question or term → answer" onPress={() => setDirection('front-to-back')} />
+            <Choice selected={direction === 'back-to-front'} label="Back to front" detail="Answer or definition → original front" onPress={() => setDirection('back-to-front')} />
           </View>
         </SetupSection>
 
-        <AppButton disabled={busy} icon="play" label={busy ? 'Building test…' : 'Start test'} onPress={() => void beginTest()} />
+        <SetupSection title="Length" body={`Your Study Profile target is ${profile.sessionLength || 'unlimited'} cards.`}>
+          <View style={styles.compactChoices}>
+            {[5, 10, 20, 0].map((count) => <SmallChoice key={count} selected={questionLimit === count && !customLimit} label={count || 'All'} onPress={() => { setCustomLimit(''); setQuestionLimit(count); }} />)}
+            <TextInput
+              accessibilityLabel="Custom question count"
+              keyboardType="number-pad"
+              maxLength={3}
+              onChangeText={(value) => {
+                const digits = value.replace(/\D/g, '');
+                const amount = digits ? Math.max(1, Math.min(100, Number(digits))) : null;
+                setCustomLimit(amount ? String(amount) : '');
+                if (amount) setQuestionLimit(amount);
+              }}
+              placeholder="Custom"
+              placeholderTextColor={colors.slate}
+              style={styles.customCount}
+              value={customLimit}
+            />
+          </View>
+        </SetupSection>
+
+        <AppButton disabled={busy} icon="play" label={busy ? 'Building practice…' : 'Start test'} onPress={() => void beginTest()} />
       </ScrollView>
+      </AppShell>
     );
   }
 
   if (phase === 'results') {
     const accuracy = questions.length ? Math.round((correctCount / questions.length) * 100) : 0;
     return (
+      <AppShell active="study">
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.resultHero}>
           <View style={styles.scoreRing}><Text style={styles.score}>{accuracy}%</Text><Text style={styles.scoreLabel}>ACCURACY</Text></View>
@@ -307,38 +362,53 @@ export default function TestScreen() {
           {missedCards.length ? <AppButton icon="refresh-outline" label="Retest misses" variant="secondary" onPress={() => void beginTest(missedCards)} /> : null}
           <AppButton icon="options-outline" label="New test" variant="secondary" onPress={() => setPhase('setup')} />
         </View>
-        {missedCards.length ? <View style={styles.section}><Text style={styles.sectionTitle}>Concepts to repair</Text>{missedCards.map((card) => <View key={card.id} style={styles.reviewCard}><Text style={styles.questionText}>{card.prompt}</Text><StructuredAnswer answer={card.answer} /><EvidenceBox evidence={card.evidence} /></View>)}</View> : null}
+        {missedCards.length ? <View style={styles.section}><Text style={styles.sectionTitle}>Concepts to repair</Text>{missedCards.map((card) => <View key={card.id} style={styles.reviewCard}><Text style={styles.questionText}>{card.prompt}</Text><StructuredAnswer answer={card.answer} variant="study" /></View>)}</View> : null}
       </ScrollView>
+      </AppShell>
     );
   }
 
-  if (!current) return <LoadingState label="Preparing question" />;
-  const awaitingConfidence = current.type === 'multiple-choice' && selectedOptionId && !feedback;
+  if (!current) {
+    return (
+      <AppShell active="study">
+        <LoadingState label="Preparing question" />
+      </AppShell>
+    );
+  }
+  const awaitingConfidence =
+    (current.type === 'multiple-choice' || current.type === 'true-false') && selectedOptionId && !feedback;
 
   return (
+    <AppShell active="study">
     <ScrollView contentContainerStyle={styles.testContainer} keyboardShouldPersistTaps="handled">
       <View style={styles.testHeader}>
-        <View style={styles.testTopline}><Text style={styles.testMeta}>QUESTION {questionIndex + 1} OF {questions.length}</Text><Text style={styles.typePill}>{current.type === 'multiple-choice' ? 'BEST ANSWER' : 'WRITTEN RECALL'}</Text></View>
+        <View style={styles.testTopline}><Text style={styles.testMeta}>QUESTION {questionIndex + 1} OF {questions.length}</Text><Text style={styles.typePill}>{questionTypeLabel(current.type)}</Text></View>
         <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.max(4, progress * 100)}%` }]} /></View>
       </View>
 
       <View style={styles.questionCard}>
         <Text style={styles.deckLabel}>{current.card.deckTitle} · {current.card.cardType.replace(/-/g, ' ')}</Text>
         <Text style={styles.questionTextLarge}>{current.prompt}</Text>
-        {current.card.learningObjective ? <View style={styles.objective}><Ionicons name="bulb-outline" size={17} color={colors.gold} /><Text style={styles.objectiveText}>{current.card.learningObjective}</Text></View> : null}
       </View>
 
-      {current.type === 'multiple-choice' ? (
+      {current.type === 'true-false' && current.proposedAnswer ? (
+        <View style={styles.proposedPanel}>
+          <Text style={styles.proposedLabel}>PROPOSED ANSWER</Text>
+          <Text style={styles.proposedAnswer}>{current.proposedAnswer}</Text>
+        </View>
+      ) : null}
+
+      {current.type === 'multiple-choice' || current.type === 'true-false' ? (
         <View style={styles.optionList}>{current.options.map((option, index) => {
           const selected = selectedOptionId === option.id;
           const showResult = Boolean(feedback);
           const correct = option.id === current.correctOptionId;
-          return <Pressable disabled={Boolean(feedback) || busy} key={option.id} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => setSelectedOptionId(option.id)} style={({ pressed }) => [styles.answerOption, selected && styles.answerOptionSelected, showResult && correct && styles.answerOptionCorrect, showResult && selected && !correct && styles.answerOptionWrong, pressed && styles.pressed]}><Text style={[styles.optionLetter, (selected || (showResult && correct)) && styles.optionLetterSelected]}>{String.fromCharCode(65 + index)}</Text><Text style={styles.answerOptionText}>{option.label}</Text></Pressable>;
+          return <Pressable disabled={Boolean(feedback) || busy} key={option.id} accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={() => setSelectedOptionId(option.id)} style={({ pressed }) => [styles.answerOption, selected && styles.answerOptionSelected, showResult && correct && styles.answerOptionCorrect, showResult && selected && !correct && styles.answerOptionWrong, pressed && styles.pressed]}><Text style={[styles.optionLetter, (selected || (showResult && correct)) && styles.optionLetterSelected]}>{current.type === 'true-false' ? (index === 0 ? 'YES' : 'NO') : String.fromCharCode(65 + index)}</Text><Text style={styles.answerOptionText}>{option.label}</Text></Pressable>;
         })}</View>
       ) : (
         <View style={styles.writtenPanel}>
           <TextInput multiline editable={!showWrittenAnswer} value={writtenResponse} onChangeText={setWrittenResponse} placeholder="Recall the answer in your own words…" placeholderTextColor={colors.slate} style={styles.writtenInput} />
-          {!showWrittenAnswer ? <AppButton disabled={!writtenResponse.trim()} icon="eye-outline" label="Compare with source answer" onPress={() => setShowWrittenAnswer(true)} /> : null}
+          {!showWrittenAnswer ? <AppButton disabled={!writtenResponse.trim()} icon="eye-outline" label="Compare answer" onPress={() => setShowWrittenAnswer(true)} /> : null}
         </View>
       )}
 
@@ -347,8 +417,7 @@ export default function TestScreen() {
       {showWrittenAnswer && !feedback ? (
         <View style={styles.feedbackCard}>
           <Text style={styles.feedbackTitle}>Compare meaning, not exact wording</Text>
-          <StructuredAnswer answer={current.card.answer} variant="study" />
-          <EvidenceBox evidence={current.card.evidence} />
+          <StructuredAnswer answer={current.correctAnswer} variant="study" />
           <View style={styles.actions}>
             <AppButton disabled={busy} label="I missed it" variant="danger" onPress={() => void submitAnswer(false, 'unsure', writtenResponse)} />
             <AppButton disabled={busy} label="Partly recalled" variant="secondary" onPress={() => void submitAnswer(true, 'unsure', writtenResponse)} />
@@ -360,17 +429,42 @@ export default function TestScreen() {
       {feedback ? (
         <View style={[styles.feedbackCard, feedback.correct ? styles.feedbackCorrect : styles.feedbackWrong]}>
           <View style={styles.feedbackHeading}><Ionicons name={feedback.correct ? 'checkmark-circle' : 'refresh-circle'} size={24} color={feedback.correct ? colors.green : colors.coral} /><Text style={styles.feedbackTitle}>{feedback.correct ? (feedback.confidence === 'unsure' ? 'Correct, but keep it close' : 'Correct') : feedback.confidence !== 'unsure' ? 'Confident miss · urgent repair added' : 'Added to your repair queue'}</Text></View>
-          <StructuredAnswer answer={feedback.question.card.answer} variant="study" />
-          <EvidenceBox evidence={feedback.question.card.evidence} />
+          <StructuredAnswer answer={feedback.question.correctAnswer} variant="study" />
           <AppButton disabled={busy} icon="arrow-forward" label={questionIndex + 1 === questions.length ? 'See results' : 'Next question'} onPress={() => void goNext()} />
         </View>
       ) : null}
     </ScrollView>
+    </AppShell>
   );
 }
 
 function ConfidenceRow({ disabled, onChoose }: { disabled: boolean; onChoose: (value: TestConfidence) => void }) {
   return <View style={styles.confidencePanel}><View><Text style={styles.feedbackTitle}>How sure were you?</Text><Text style={styles.body}>Confidence helps Barion schedule the concept honestly.</Text></View><View style={styles.actions}><AppButton disabled={disabled} label="I guessed" variant="secondary" onPress={() => onChoose('unsure')} /><AppButton disabled={disabled} label="Confident" onPress={() => onChoose('confident')} /><AppButton disabled={disabled} label="Very easy" variant="quiet" onPress={() => onChoose('easy')} /></View></View>;
+}
+
+function parseScope(value?: string): TestScope {
+  return value === 'weak' || value === 'all' || value === 'due' ? value : 'due';
+}
+
+function parseFormat(value?: string): TestFormat {
+  return value === 'clinical' || value === 'rapid-recall' || value === 'adaptive' ? value : 'adaptive';
+}
+
+function parseDirection(value?: string): TestDirection {
+  return value === 'front-to-back' || value === 'back-to-front' || value === 'both' ? value : 'both';
+}
+
+function parseLimit(value?: string) {
+  if (!value) return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return Math.max(0, Math.min(100, Math.round(amount)));
+}
+
+function questionTypeLabel(type: TestQuestion['type']) {
+  if (type === 'multiple-choice') return 'BEST ANSWER';
+  if (type === 'true-false') return 'PROPOSED ANSWER';
+  return 'WRITTEN RECALL';
 }
 
 function SetupSection({ title, body, children }: { title: string; body: string; children: React.ReactNode }) {
@@ -400,6 +494,7 @@ const styles = StyleSheet.create({
   choiceSelected: { backgroundColor: colors.surfaceMuted, borderColor: colors.blue, borderWidth: 2 },
   choiceTopline: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   compactChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  customCount: { backgroundColor: colors.canvas, borderColor: colors.lineStrong, borderRadius: radii.sm, borderWidth: 1, color: colors.ink, fontFamily: fonts.bold, fontSize: 13, minHeight: 44, minWidth: 96, paddingHorizontal: 12 },
   confidencePanel: { backgroundColor: colors.surface, borderColor: colors.lineStrong, borderRadius: radii.md, borderWidth: 1, gap: 12, padding: 15 },
   container: { gap: 17, marginHorizontal: 'auto', maxWidth: 1040, padding: 18, paddingBottom: 48, width: '100%' },
   deckLabel: { color: colors.tealDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
@@ -421,6 +516,9 @@ const styles = StyleSheet.create({
   optionLetterSelected: { backgroundColor: colors.blue, color: colors.surface },
   optionList: { gap: 9 },
   pressed: { opacity: 0.8 },
+  proposedAnswer: { color: colors.ink, fontFamily: fonts.bold, fontSize: 17, lineHeight: 25 },
+  proposedLabel: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.9 },
+  proposedPanel: { backgroundColor: colors.surfaceMuted, borderColor: colors.lineStrong, borderRadius: radii.md, borderWidth: 1, gap: 8, padding: 14 },
   progressFill: { backgroundColor: colors.blue, borderRadius: radii.pill, height: '100%' },
   progressTrack: { backgroundColor: colors.line, borderRadius: radii.pill, height: 7, overflow: 'hidden' },
   questionCard: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.lg, borderWidth: 1, gap: 12, padding: 20 },

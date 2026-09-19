@@ -53,24 +53,35 @@ Barion is an offline-first medical learning platform. The local study loop works
 - A stricter card-quality gate using medical importance, active-recall structure, duplication checks, and answer-to-evidence token coverage.
 - Diagnostic-reasoning and ordered-algorithm extractive templates alongside definitions, mechanisms, findings, risks, comparisons, safety, treatment, and cloze recall.
 - Batched card-evidence hydration to avoid one database query per visible card.
+- A unified Study Engine with Browse, one-pass sorting, repeat-until-clear sorting, fixed quick spacing, guided Learn, FSRS, and hands-light Audio review.
+- A goal-first mode chooser that keeps optional modes behind “More ways to study” and never treats recognition as long-term mastery.
+- Append-only activity evidence plus separate short-term familiarity, so cram, Match, and Browse cannot silently corrupt FSRS.
+- A 14-day offline Review Calendar with local study blocks, exam dates, overdue roll-forward, and separate quick-spacing counts.
+- A durable six-pair Match mode with mistake retry, resumable matched-pair state, and idempotent scoring.
+- Native print/PDF layouts, CSV/TSV class/folder/deck exports, and content-only deck copy with fresh scheduling state.
+- Configurable test direction (front-to-back, back-to-front, or safe automatic both) persisted with resumable tests.
+- Full local learning backup v2 coverage for activity evidence, short-term mastery, calendar blocks, and game sessions.
 
 ## Current Learning Milestone
 
-The first learner-control and adaptive-testing slice is implemented:
+The learner-control, unified-mode, and adaptive-testing slices are implemented:
 
 ```text
 study profile
 -> workload-limited FSRS review
+-> goal-first study mode selection
+-> short-term practice isolated from long-term memory
 -> evidence-aware card quality gate
 -> configurable test mode
 -> confidence-based scheduling
 -> weak-concept repair queue
+-> offline calendar, audio, match, print, export, and backup
 ```
 
 The next slice should deepen, not duplicate, that foundation:
 
 1. Semantic medical verification and model-generated cards behind an explicit review boundary.
-2. Richer test item families: select-all, matching, sequencing, and source-supported clinical vignettes.
+2. Richer test item families: select-all, sequencing, image occlusion, and source-supported clinical vignettes. Match exists as recognition-only practice.
 3. A card browser with tags, move-to-deck, duplicate review, scheduling history, and saved filters.
 4. Mastery analytics, workload forecast, and weak-concept grouping across sources.
 5. Regeneration batches with an inspectable revision history for reviewed cards.

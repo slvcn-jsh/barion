@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { seedDatabaseIfNeeded } from '@/storage/seed';
 
-const DATABASE_VERSION = 12;
+export const DATABASE_VERSION = 16;
 
 let database: SQLite.SQLiteDatabase | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -60,6 +60,7 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       icon TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      copied_from_deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL,
       archived_at TEXT,
       deleted_at TEXT
     );
@@ -115,6 +116,18 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       start_offset INTEGER,
       end_offset INTEGER,
       created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS source_study_guides (
+      id TEXT PRIMARY KEY NOT NULL,
+      source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      overview TEXT NOT NULL,
+      outline_json TEXT NOT NULL,
+      quick_reference_json TEXT NOT NULL,
+      discussion_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS card_evidence (
@@ -246,6 +259,7 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       id TEXT PRIMARY KEY NOT NULL,
       deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL,
       format TEXT NOT NULL,
+      direction TEXT NOT NULL DEFAULT 'both',
       scope TEXT NOT NULL,
       question_limit INTEGER NOT NULL,
       total_count INTEGER NOT NULL,
@@ -315,8 +329,70 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
       position INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      learning_state TEXT NOT NULL DEFAULT 'unseen',
+      last_outcome TEXT,
+      available_at TEXT,
       completed_at TEXT,
       PRIMARY KEY (session_id, card_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS study_activity_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT REFERENCES study_sessions(id) ON DELETE SET NULL,
+      card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
+      activity_mode TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      response_time_ms INTEGER NOT NULL DEFAULT 0,
+      affects_fsrs INTEGER NOT NULL DEFAULT 0,
+      occurred_at TEXT NOT NULL,
+      reverted_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS card_mode_mastery (
+      card_id TEXT PRIMARY KEY NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      familiarity REAL NOT NULL DEFAULT 0,
+      short_due_at TEXT,
+      learning_count INTEGER NOT NULL DEFAULT 0,
+      known_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS study_blocks (
+      id TEXT PRIMARY KEY NOT NULL,
+      course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+      module_id TEXT REFERENCES course_modules(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      starts_at TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL DEFAULT 20,
+      status TEXT NOT NULL DEFAULT 'planned',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS game_sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      game_type TEXT NOT NULL,
+      deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL,
+      module_id TEXT REFERENCES course_modules(id) ON DELETE SET NULL,
+      total_pairs INTEGER NOT NULL,
+      matched_pairs INTEGER NOT NULL DEFAULT 0,
+      mistake_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      cards_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS game_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL REFERENCES game_sessions(id) ON DELETE CASCADE,
+      card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
+      event_type TEXT NOT NULL,
+      elapsed_ms INTEGER NOT NULL DEFAULT 0,
+      occurred_at TEXT NOT NULL
     );
   `);
 
@@ -441,6 +517,12 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
     cardDeletedAt: await addColumnIfMissing(db, 'cards', 'deleted_at', 'TEXT'),
     deckArchivedAt: await addColumnIfMissing(db, 'decks', 'archived_at', 'TEXT'),
     deckDeletedAt: await addColumnIfMissing(db, 'decks', 'deleted_at', 'TEXT'),
+    deckCopiedFromId: await addColumnIfMissing(
+      db,
+      'decks',
+      'copied_from_deck_id',
+      'TEXT REFERENCES decks(id) ON DELETE SET NULL',
+    ),
     defaultDeckId: await addColumnIfMissing(
       db,
       'sources',
@@ -495,6 +577,12 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       "TEXT NOT NULL DEFAULT '[]'",
     ),
     testSessionUpdatedAt: await addColumnIfMissing(db, 'test_sessions', 'updated_at', 'TEXT'),
+    testSessionDirection: await addColumnIfMissing(
+      db,
+      'test_sessions',
+      'direction',
+      "TEXT NOT NULL DEFAULT 'both'",
+    ),
     profileWorkspaceMode: await addColumnIfMissing(
       db,
       'study_profiles',
@@ -519,6 +607,38 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'reminder_hour',
       'INTEGER NOT NULL DEFAULT 19',
     ),
+    studySessionEngineMode: await addColumnIfMissing(
+      db,
+      'study_sessions',
+      'engine_mode',
+      "TEXT NOT NULL DEFAULT 'fsrs'",
+    ),
+    studySessionLearningGoal: await addColumnIfMissing(
+      db,
+      'study_sessions',
+      'learning_goal',
+      "TEXT NOT NULL DEFAULT 'long-term'",
+    ),
+    studySessionSettingsJson: await addColumnIfMissing(
+      db,
+      'study_sessions',
+      'settings_json',
+      "TEXT NOT NULL DEFAULT '{}'",
+    ),
+    studyItemAttemptCount: await addColumnIfMissing(
+      db,
+      'study_session_items',
+      'attempt_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    studyItemLearningState: await addColumnIfMissing(
+      db,
+      'study_session_items',
+      'learning_state',
+      "TEXT NOT NULL DEFAULT 'unseen'",
+    ),
+    studyItemLastOutcome: await addColumnIfMissing(db, 'study_session_items', 'last_outcome', 'TEXT'),
+    studyItemAvailableAt: await addColumnIfMissing(db, 'study_session_items', 'available_at', 'TEXT'),
     learningLapseCount: await addColumnIfMissing(
       db,
       'card_learning_state',
@@ -756,6 +876,28 @@ async function consolidateDuplicateSources(db: SQLite.SQLiteDatabase) {
         WHERE duplicate_id != canonical_id
       );
 
+      DELETE FROM source_study_guides
+      WHERE source_id IN (
+        SELECT duplicate_id
+        FROM source_merge_map
+        WHERE duplicate_id != canonical_id
+          AND EXISTS (
+            SELECT 1
+            FROM source_study_guides AS canonical_guide
+            WHERE canonical_guide.source_id = source_merge_map.canonical_id
+          )
+      );
+
+      UPDATE source_study_guides
+      SET source_id = (
+        SELECT canonical_id FROM source_merge_map
+        WHERE duplicate_id = source_study_guides.source_id
+      )
+      WHERE source_id IN (
+        SELECT duplicate_id FROM source_merge_map
+        WHERE duplicate_id != canonical_id
+      );
+
       UPDATE generation_jobs
       SET source_id = (
             SELECT canonical_id FROM source_merge_map
@@ -872,10 +1014,12 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_memory_states_due_at ON memory_states(due_at);
     CREATE INDEX IF NOT EXISTS idx_review_events_card_time ON review_events(card_id, reviewed_at);
     CREATE INDEX IF NOT EXISTS idx_source_segments_source_id ON source_segments(source_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_source_study_guides_source ON source_study_guides(source_id);
     CREATE INDEX IF NOT EXISTS idx_sources_sha256 ON sources(sha256);
     CREATE INDEX IF NOT EXISTS idx_sources_default_deck ON sources(default_deck_id);
     CREATE INDEX IF NOT EXISTS idx_sources_visibility ON sources(deleted_at, archived_at, created_at);
     CREATE INDEX IF NOT EXISTS idx_decks_visibility ON decks(deleted_at, archived_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_decks_copy_lineage ON decks(copied_from_deck_id);
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_source_id ON generation_jobs(source_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_card_learning_weak ON card_learning_state(is_suspended, weak_score DESC);
     CREATE INDEX IF NOT EXISTS idx_card_learning_buried ON card_learning_state(buried_until, is_suspended);
@@ -891,6 +1035,12 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_module_decks_deck ON module_decks(deck_id);
     CREATE INDEX IF NOT EXISTS idx_study_sessions_active ON study_sessions(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_study_session_items_pending ON study_session_items(session_id, status, position);
+    CREATE INDEX IF NOT EXISTS idx_study_activity_session_time ON study_activity_events(session_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_study_activity_card_time ON study_activity_events(card_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_card_mode_mastery_due ON card_mode_mastery(short_due_at);
+    CREATE INDEX IF NOT EXISTS idx_study_blocks_start ON study_blocks(status, starts_at);
+    CREATE INDEX IF NOT EXISTS idx_game_sessions_status ON game_sessions(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_game_events_session ON game_events(session_id, occurred_at);
   `);
 }
 
@@ -913,7 +1063,7 @@ async function ensureSearchIndex(db: SQLite.SQLiteDatabase) {
 async function rebuildSearchIndexIfNeeded(db: SQLite.SQLiteDatabase) {
   const status = await db.getFirstAsync<{ value: string }>(
     'SELECT value FROM app_metadata WHERE key = ?',
-    'cards_fts_built_v2',
+    'cards_fts_built_v3',
   );
 
   if (status?.value === 'true') {
@@ -924,7 +1074,7 @@ async function rebuildSearchIndexIfNeeded(db: SQLite.SQLiteDatabase) {
   await rebuildSearchIndex(db);
   await db.runAsync(
     `INSERT OR REPLACE INTO app_metadata (key, value) VALUES (?, ?)`,
-    'cards_fts_built_v2',
+    'cards_fts_built_v3',
     'true',
   );
 }
@@ -936,9 +1086,18 @@ async function rebuildSearchIndex(db: SQLite.SQLiteDatabase) {
       INSERT INTO cards_fts (card_id, deck_id, prompt, answer, deck_title)
       SELECT cards.id, cards.deck_id, cards.prompt, cards.answer, decks.title
       FROM cards
-      JOIN decks ON decks.id = cards.deck_id;
+      JOIN decks ON decks.id = cards.deck_id
+      WHERE cards.deleted_at IS NULL
+        AND decks.deleted_at IS NULL
+        AND decks.archived_at IS NULL;
     `);
   } catch {
     // Fallback search does not require an index.
   }
+}
+
+export async function refreshSearchIndex() {
+  const db = await getDatabase();
+  await ensureSearchIndex(db);
+  await rebuildSearchIndex(db);
 }

@@ -14,6 +14,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/AppButton';
 import { BrandMark } from '@/components/BrandMark';
@@ -60,7 +61,7 @@ export default function RootLayout() {
   }
 
   return (
-    <>
+    <SafeAreaProvider>
       <StatusBar style="dark" />
       <Stack
         screenOptions={{
@@ -72,20 +73,26 @@ export default function RootLayout() {
           animation: 'slide_from_right',
         }}
       >
-        <Stack.Screen name="index" options={{ title: 'BARION' }} />
+        <Stack.Screen name="index" options={{ headerShown: false, title: 'BARION' }} />
         <Stack.Screen name="study" options={{ title: 'Review' }} />
-        <Stack.Screen name="sources" options={{ title: 'Source Library' }} />
-        <Stack.Screen name="library" options={{ title: 'Manage Library' }} />
-        <Stack.Screen name="profile" options={{ title: 'Study Profile' }} />
-        <Stack.Screen name="classes" options={{ title: 'Classes & Folders' }} />
-        <Stack.Screen name="courses" options={{ title: 'Classes & Folders' }} />
-        <Stack.Screen name="test" options={{ title: 'Test Mode' }} />
+        <Stack.Screen name="modes" options={{ headerShown: false, title: 'Ways to Study' }} />
+        <Stack.Screen name="calendar" options={{ headerShown: false, title: 'Review Calendar' }} />
+        <Stack.Screen name="match" options={{ headerShown: false, title: 'Match' }} />
+        <Stack.Screen name="print" options={{ title: 'Print Deck' }} />
+        <Stack.Screen name="sources" options={{ headerShown: false, title: 'Source Library' }} />
+        <Stack.Screen name="library" options={{ headerShown: false, title: 'Manage Library' }} />
+        <Stack.Screen name="data" options={{ headerShown: false, title: 'Data & Offline' }} />
+        <Stack.Screen name="profile" options={{ headerShown: false, title: 'Study Profile' }} />
+        <Stack.Screen name="classes" options={{ headerShown: false, title: 'Classes & Folders' }} />
+        <Stack.Screen name="courses" options={{ headerShown: false, title: 'Classes & Folders' }} />
+        <Stack.Screen name="more" options={{ headerShown: false, title: 'More' }} />
+        <Stack.Screen name="test" options={{ headerShown: false, title: 'Test Mode' }} />
         <Stack.Screen name="deck/[id]" options={{ title: 'Deck' }} />
         <Stack.Screen name="deck/new" options={{ title: 'New Deck' }} />
         <Stack.Screen name="card/new" options={{ title: 'New Card' }} />
         <Stack.Screen name="source/[id]" options={{ title: 'Source' }} />
       </Stack>
-    </>
+    </SafeAreaProvider>
   );
 }
 

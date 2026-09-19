@@ -37,4 +37,26 @@ describe('createExtractiveDrafts', () => {
       expect(draft.question).not.toMatch(/key takeaway|main point|what does the source say/i);
     }
   });
+
+  it('formats generated answers as clean learner-facing recall cards', () => {
+    const drafts = createExtractiveDrafts([segment]);
+
+    expect(drafts.length).toBeGreaterThan(0);
+    for (const draft of drafts) {
+      expect(draft.answer).not.toContain('Answer:');
+      expect(draft.answer).not.toContain('Recall focus:');
+      expect(draft.answer).not.toContain('Why it matters:');
+      expect(draft.answer).not.toContain('Source linked:');
+      expect(draft.answer).not.toMatch(/main point|key takeaway|this section/i);
+    }
+  });
+
+  it('does not turn generic cloze words into cards', () => {
+    const drafts = createExtractiveDrafts([{
+      ...segment,
+      text: 'Complex Somatic Symptom Disorder includes headache, chest pain, and illness anxiety disorder.',
+    }]);
+
+    expect(drafts.every((draft) => draft.answer.toLowerCase() !== 'symptom.')).toBe(true);
+  });
 });

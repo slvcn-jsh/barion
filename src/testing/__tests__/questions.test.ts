@@ -69,4 +69,40 @@ describe('buildTestQuestions', () => {
     expect(questions[1].type).toBe('multiple-choice');
     expect(questions[2].type).toBe('written-recall');
   });
+
+  it('reverses only the existing card sides without inventing medical content', () => {
+    const cards = [
+      card('one', 'definition', 'A persistent elevation in arterial pressure', 'What is hypertension?'),
+      card('two', 'definition', 'A sustained elevation in blood glucose', 'What is diabetes mellitus?'),
+      card('three', 'definition', 'Inflammation of the pericardial sac', 'What is pericarditis?'),
+      card('four', 'definition', 'Inflammation of the pancreatic tissue', 'What is pancreatitis?'),
+    ];
+
+    const questions = buildTestQuestions(cards, 'rapid-recall', 'standard', 'back-to-front');
+
+    expect(questions[0].prompt).toBe('A persistent elevation in arterial pressure');
+    expect(questions[0].correctAnswer).toBe('What is hypertension?');
+    expect(questions.every((question) => question.direction === 'back-to-front')).toBe(true);
+  });
+
+  it('adds proposed-answer checks to clinical practice without replacing the source answer', () => {
+    const cards = [
+      card('one', 'clinical-finding', 'Painless cervical lymphadenopathy'),
+      card('two', 'clinical-finding', 'Progressive exertional dyspnea'),
+      card('three', 'clinical-finding', 'Sudden unilateral leg swelling'),
+      card('four', 'clinical-finding', 'Persistent resting tremor'),
+      card('five', 'clinical-finding', 'Severe headache with visual changes'),
+      card('six', 'clinical-finding', 'Crushing substernal chest pain'),
+    ];
+
+    const questions = buildTestQuestions(cards, 'clinical', 'standard', 'front-to-back');
+    const proposed = questions.find((question) => question.type === 'true-false');
+
+    expect(proposed).toBeDefined();
+    expect(proposed?.proposedAnswer).toBeTruthy();
+    expect(proposed?.options.map((option) => option.label)).toEqual(['Correct', 'Not correct']);
+    expect(cards.map((item) => item.answer.replace(/^Answer:\s*/, ''))).toContain(proposed?.correctAnswer);
+    expect(proposed?.correctAnswer).not.toBe('Correct');
+    expect(proposed?.correctAnswer).not.toBe('Not correct');
+  });
 });

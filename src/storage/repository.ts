@@ -6,6 +6,7 @@ import { createId, nowIso } from '@/domain/ids';
 import {
   buildImportedCardsForRow,
   exportCardsToCsv,
+  exportCardsToTsv,
   type CardImportReadyRow,
 } from '@/cards/importExport';
 import type {
@@ -23,13 +24,20 @@ import type {
   GeneratedCandidate,
   GenerationJobSummary,
   ReviewRating,
+  SourceStudyGuide,
+  SourceStudyGuideDiscussionQuestion,
+  SourceStudyGuideQuickReference,
+  SourceStudyGuideSection,
   StudyProfile,
   SourceDetail,
   SourceItem,
   SourceSegment,
   StudyCard,
+  StudyEngineMode,
+  StudyLearningGoal,
   StudyMode,
   TestConfidence,
+  TestDirection,
   TestFormat,
   TestQuestion,
   TestScope,
@@ -40,6 +48,7 @@ import type {
 import { AUTO_PUBLISH_QUALITY_SCORE, createExtractiveDrafts } from '@/ingestion/drafts';
 import { readSourceAsset } from '@/ingestion/readSource';
 import { segmentExtractedPages } from '@/ingestion/segmenter';
+import { createStudyGuide, type GeneratedStudyGuide } from '@/ingestion/studyGuide';
 import {
   SourceActionRequiredError,
   type ParsedSegment,
@@ -59,6 +68,17 @@ import { decideTestEvidence } from '@/testing/evidencePolicy';
 
 type CountRow = { count: number };
 type WritableDatabase = SQLite.SQLiteDatabase;
+type SourceStudyGuideRow = {
+  id: string;
+  sourceId: string;
+  title: string;
+  overview: string;
+  outlineJson: string;
+  quickReferenceJson: string;
+  discussionJson: string;
+  createdAt: string;
+  updatedAt: string;
+};
 type ImportedCardResult = {
   createdCardCount: number;
   createdNoteCount: number;
@@ -83,8 +103,9 @@ export async function getDashboard(): Promise<Dashboard> {
       decks.created_at AS createdAt,
       decks.updated_at AS updatedAt,
       COUNT(DISTINCT cards.id) AS cardCount,
-      COUNT(DISTINCT CASE WHEN memory_states.due_at <= ? AND COALESCE(card_learning_state.is_suspended, 0) = 0 AND (card_learning_state.buried_until IS NULL OR card_learning_state.buried_until <= ?) THEN cards.id END) AS dueCount,
-      COUNT(DISTINCT card_evidence.id) AS evidenceCount
+      COUNT(DISTINCT CASE WHEN memory_states.due_at <= ? AND cards.status != 'needs_review' AND COALESCE(card_learning_state.is_suspended, 0) = 0 AND (card_learning_state.buried_until IS NULL OR card_learning_state.buried_until <= ?) THEN cards.id END) AS dueCount,
+      COUNT(DISTINCT card_evidence.id) AS evidenceCount,
+      COUNT(DISTINCT CASE WHEN cards.status = 'needs_review' THEN cards.id END) AS needsReviewCount
     FROM decks
     LEFT JOIN cards ON cards.deck_id = decks.id AND cards.deleted_at IS NULL
     LEFT JOIN memory_states ON memory_states.card_id = cards.id
@@ -114,6 +135,7 @@ export async function getDashboard(): Promise<Dashboard> {
        AND cards.deleted_at IS NULL
        AND decks.deleted_at IS NULL
        AND decks.archived_at IS NULL
+       AND cards.status != 'needs_review'
        AND COALESCE(card_learning_state.is_suspended, 0) = 0
        AND (card_learning_state.buried_until IS NULL OR card_learning_state.buried_until <= ?)`,
     now,
@@ -156,6 +178,15 @@ export async function getDashboard(): Promise<Dashboard> {
        AND decks.deleted_at IS NULL
        AND decks.archived_at IS NULL`,
   );
+  const needsReviewCount = await db.getFirstAsync<CountRow>(
+    `SELECT COUNT(*) AS count
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     WHERE cards.status = 'needs_review'
+       AND cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL`,
+  );
 
   return {
     dueCount: dueCount?.count ?? 0,
@@ -164,6 +195,7 @@ export async function getDashboard(): Promise<Dashboard> {
     sourceCount: sourceCount?.count ?? 0,
     weakCount: Number(weakCount?.count ?? 0),
     leechCount: Number(leechCount?.count ?? 0),
+    needsReviewCount: Number(needsReviewCount?.count ?? 0),
     reviewedToday: Number(reviewedToday?.count ?? 0),
     dailyReviewLimit: profile.dailyReviewLimit,
     sessionLength: profile.sessionLength,
@@ -172,6 +204,7 @@ export async function getDashboard(): Promise<Dashboard> {
       cardCount: Number(deck.cardCount ?? 0),
       dueCount: Number(deck.dueCount ?? 0),
       evidenceCount: Number(deck.evidenceCount ?? 0),
+      needsReviewCount: Number(deck.needsReviewCount ?? 0),
     })),
   };
 }
@@ -337,6 +370,7 @@ export async function getStudyQueue(
       AND cards.deleted_at IS NULL
       AND decks.deleted_at IS NULL
       AND decks.archived_at IS NULL
+      AND cards.status != 'needs_review'
       AND COALESCE(card_learning_state.is_suspended, 0) = 0
       AND (card_learning_state.buried_until IS NULL OR card_learning_state.buried_until <= ?)
       ${deckFilter}
@@ -356,6 +390,64 @@ export async function getStudyQueue(
   }).slice(0, sessionLimit);
 
   return hydrateCards(selected);
+}
+
+export async function getModeStudyQueue(
+  deckId?: string,
+  moduleId?: string,
+  limitOverride?: number,
+): Promise<StudyCard[]> {
+  const db = await getDatabase();
+  const profile = await getStudyProfile();
+  const limit = limitOverride ?? profile.sessionLength;
+  const deckFilter = deckId
+    ? 'AND cards.deck_id = ?'
+    : moduleId
+      ? `AND cards.deck_id IN (
+           SELECT module_decks.deck_id
+           FROM module_decks
+           JOIN course_modules ON course_modules.id = module_decks.module_id
+           JOIN courses ON courses.id = course_modules.course_id
+           WHERE module_decks.module_id = ?
+             AND courses.deleted_at IS NULL
+             AND courses.archived_at IS NULL
+         )`
+      : '';
+  const params = deckId ? [deckId] : moduleId ? [moduleId] : [];
+  const cards = await db.getAllAsync<StudyCard>(
+    `SELECT
+       cards.id, cards.deck_id AS deckId, decks.title AS deckTitle, cards.prompt, cards.answer,
+       cards.card_type AS cardType, cards.status, cards.is_starred AS isStarred,
+       memory_states.due_at AS dueAt, memory_states.fsrs_card_json AS fsrsCardJson,
+       memory_states.last_reviewed_at AS lastReviewedAt,
+       card_quality.learning_objective AS learningObjective,
+       card_quality.quality_score AS qualityScore,
+       card_quality.quality_notes AS qualityNotes,
+       COALESCE(card_learning_state.weak_score, 0) AS weakScore,
+       COALESCE(card_learning_state.is_flagged, 0) AS isFlagged,
+       COALESCE(card_learning_state.is_suspended, 0) AS isSuspended,
+       COALESCE(card_learning_state.is_leech, 0) AS isLeech,
+       COALESCE(card_learning_state.lapse_count, 0) AS lapseCount
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     JOIN memory_states ON memory_states.card_id = cards.id
+     LEFT JOIN card_quality ON card_quality.card_id = cards.id
+     LEFT JOIN card_learning_state ON card_learning_state.card_id = cards.id
+     LEFT JOIN card_mode_mastery ON card_mode_mastery.card_id = cards.id
+     WHERE cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL
+       AND cards.status != 'needs_review'
+       AND COALESCE(card_learning_state.is_suspended, 0) = 0
+       ${deckFilter}
+     ORDER BY COALESCE(card_learning_state.weak_score, 0) DESC,
+              CASE WHEN card_mode_mastery.short_due_at IS NOT NULL AND card_mode_mastery.short_due_at <= ? THEN 0 ELSE 1 END,
+              memory_states.due_at ASC,
+              cards.created_at ASC
+     LIMIT ?`,
+    [...params, nowIso(), limit === 0 ? 500 : Math.min(limit, 500)],
+  );
+  return hydrateCards(cards);
 }
 
 export async function getDailyPlan(minimum = false): Promise<DailyPlan> {
@@ -392,12 +484,16 @@ export async function startStudySession({
   focus,
   mode,
   planSize,
+  engineMode = 'fsrs',
+  learningGoal = 'long-term',
 }: {
   cards: StudyCard[];
   deckId?: string;
   focus?: string;
   mode: ActiveStudySession['mode'];
   planSize: ActiveStudySession['planSize'];
+  engineMode?: StudyEngineMode;
+  learningGoal?: StudyLearningGoal;
 }): Promise<ActiveStudySession> {
   if (!cards.length) throw new Error('There are no cards available for this study session.');
   const db = await getDatabase();
@@ -410,10 +506,12 @@ export async function startStudySession({
     );
     await txn.runAsync(
       `INSERT INTO study_sessions
-       (id, mode, deck_id, focus, plan_size, total_count, completed_count, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)`,
+       (id, mode, engine_mode, learning_goal, deck_id, focus, plan_size, total_count, completed_count, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)`,
       id,
       mode,
+      engineMode,
+      learningGoal,
       deckId ?? null,
       focus ?? null,
       planSize,
@@ -434,6 +532,8 @@ export async function startStudySession({
   return {
     id,
     mode,
+    engineMode,
+    learningGoal,
     deckId: deckId ?? null,
     focus: focus ?? null,
     planSize,
@@ -447,7 +547,8 @@ export async function startStudySession({
 export async function getLatestActiveStudySession(): Promise<ActiveStudySession | null> {
   const db = await getDatabase();
   const session = await db.getFirstAsync<Omit<ActiveStudySession, 'cards'>>(
-    `SELECT id, mode, deck_id AS deckId, focus, plan_size AS planSize,
+    `SELECT id, mode, engine_mode AS engineMode, learning_goal AS learningGoal,
+            deck_id AS deckId, focus, plan_size AS planSize,
             total_count AS totalCount, completed_count AS completedCount, created_at AS createdAt
      FROM study_sessions
      WHERE status = 'active'
@@ -481,6 +582,7 @@ export async function getLatestActiveStudySession(): Promise<ActiveStudySession 
        AND cards.deleted_at IS NULL
        AND decks.deleted_at IS NULL
        AND decks.archived_at IS NULL
+       AND cards.status != 'needs_review'
        AND COALESCE(card_learning_state.is_suspended, 0) = 0
      ORDER BY study_session_items.position ASC`,
     session.id,
@@ -721,8 +823,9 @@ export async function getDeck(deckId: string) {
       decks.created_at AS createdAt,
       decks.updated_at AS updatedAt,
       COUNT(DISTINCT cards.id) AS cardCount,
-      COUNT(DISTINCT CASE WHEN memory_states.due_at <= ? AND COALESCE(card_learning_state.is_suspended, 0) = 0 THEN cards.id END) AS dueCount,
-      COUNT(DISTINCT card_evidence.id) AS evidenceCount
+      COUNT(DISTINCT CASE WHEN memory_states.due_at <= ? AND cards.status != 'needs_review' AND COALESCE(card_learning_state.is_suspended, 0) = 0 THEN cards.id END) AS dueCount,
+      COUNT(DISTINCT card_evidence.id) AS evidenceCount,
+      COUNT(DISTINCT CASE WHEN cards.status = 'needs_review' THEN cards.id END) AS needsReviewCount
     FROM decks
     LEFT JOIN cards ON cards.deck_id = decks.id AND cards.deleted_at IS NULL
     LEFT JOIN memory_states ON memory_states.card_id = cards.id
@@ -773,6 +876,7 @@ export async function getDeck(deckId: string) {
           cardCount: Number(deck.cardCount ?? 0),
           dueCount: Number(deck.dueCount ?? 0),
           evidenceCount: Number(deck.evidenceCount ?? 0),
+          needsReviewCount: Number(deck.needsReviewCount ?? 0),
         }
       : null,
     cards: await hydrateCards(cards),
@@ -831,6 +935,22 @@ export async function getSources(): Promise<SourceItem[]> {
           AND cards.deleted_at IS NULL
           AND review_events.reverted_at IS NULL
       ) AS autoGeneratedReviewedCardCount
+      ,(
+        SELECT COUNT(*)
+        FROM cards
+        JOIN notes ON notes.id = cards.note_id
+        WHERE notes.source_id = sources.id
+          AND cards.status = 'needs_review'
+          AND cards.deleted_at IS NULL
+      ) AS needsReviewCardCount
+      ,(
+        SELECT COUNT(*)
+        FROM cards
+        JOIN notes ON notes.id = cards.note_id
+        WHERE notes.source_id = sources.id
+          AND cards.status = 'verified'
+          AND cards.deleted_at IS NULL
+      ) AS verifiedCardCount
       ,(
         SELECT COUNT(DISTINCT cards.id)
         FROM cards
@@ -902,6 +1022,22 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
           AND cards.deleted_at IS NULL
           AND review_events.reverted_at IS NULL
       ) AS autoGeneratedReviewedCardCount
+      ,(
+        SELECT COUNT(*)
+        FROM cards
+        JOIN notes ON notes.id = cards.note_id
+        WHERE notes.source_id = sources.id
+          AND cards.status = 'needs_review'
+          AND cards.deleted_at IS NULL
+      ) AS needsReviewCardCount
+      ,(
+        SELECT COUNT(*)
+        FROM cards
+        JOIN notes ON notes.id = cards.note_id
+        WHERE notes.source_id = sources.id
+          AND cards.status = 'verified'
+          AND cards.deleted_at IS NULL
+      ) AS verifiedCardCount
       ,(
         SELECT COUNT(DISTINCT cards.id)
         FROM cards
@@ -987,6 +1123,30 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
     sourceId,
   );
 
+  const guideRow = await db.getFirstAsync<SourceStudyGuideRow>(
+    `
+    SELECT
+      id,
+      source_id AS sourceId,
+      title,
+      overview,
+      outline_json AS outlineJson,
+      quick_reference_json AS quickReferenceJson,
+      discussion_json AS discussionJson,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM source_study_guides
+    WHERE source_id = ?
+    LIMIT 1
+    `,
+    sourceId,
+  );
+  const studyGuide = guideRow
+    ? hydrateStudyGuide(guideRow)
+    : segments.length
+      ? fallbackStudyGuide(sourceId, source.title, segments)
+      : undefined;
+
   return {
     ...hydrateSource(source),
     segments,
@@ -996,6 +1156,7 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       supportScore: Number(candidate.supportScore ?? 0),
     })),
     generationJob: generationJob ?? undefined,
+    studyGuide,
   };
 }
 
@@ -1481,6 +1642,43 @@ export async function retrySourceProcessing(sourceId: string) {
   });
 }
 
+export async function refreshStudyGuideForSource(sourceId: string) {
+  const db = await getDatabase();
+  const source = await db.getFirstAsync<{ id: string; title: string }>(
+    `SELECT id, title
+     FROM sources
+     WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL`,
+    sourceId,
+  );
+  if (!source) {
+    throw new Error('Source not found.');
+  }
+
+  const segments = await db.getAllAsync<ParsedSegment>(
+    `SELECT
+       id,
+       locator,
+       section_path AS sectionPath,
+       text,
+       COALESCE(start_offset, 0) AS startOffset,
+       COALESCE(end_offset, length(text)) AS endOffset
+     FROM source_segments
+     WHERE source_id = ?
+     ORDER BY created_at ASC`,
+    sourceId,
+  );
+  if (!segments.length) {
+    throw new Error('Extract this source before creating a study guide.');
+  }
+
+  const now = nowIso();
+  const guide = createStudyGuide(segments, source.title);
+  await runWriteTransaction(db, async (txn) => {
+    await upsertSourceStudyGuide(txn, sourceId, guide, now);
+  });
+  return guide;
+}
+
 export async function generateDraftsForSource(sourceId: string) {
   const db = await getDatabase();
   const source = await db.getFirstAsync<{ title: string; sha256: string; defaultDeckId: string | null; sourceCardCount: number }>(
@@ -1515,7 +1713,13 @@ export async function generateDraftsForSource(sourceId: string) {
     throw new Error('Extract this source before creating drafts.');
   }
 
-  const drafts = createExtractiveDrafts(rows);
+  const profile = await getStudyProfile();
+  const studyGuide = createStudyGuide(rows, source.title);
+  const drafts = createExtractiveDrafts(rows, {
+    reviewStyle: profile.reviewStyle,
+    difficulty: profile.difficulty,
+    examGoal: profile.examGoal,
+  });
   const now = nowIso();
   const jobId = createId('job');
   const candidateIds: string[] = [];
@@ -1523,6 +1727,7 @@ export async function generateDraftsForSource(sourceId: string) {
   await runWriteTransaction(db, async (txn) => {
     await txn.runAsync("UPDATE sources SET status = 'generating', ingestion_error = NULL WHERE id = ?", sourceId);
     await txn.runAsync('DELETE FROM generation_jobs WHERE source_id = ?', sourceId);
+    await upsertSourceStudyGuide(txn, sourceId, studyGuide, now);
     await txn.runAsync(
       `INSERT INTO generation_jobs
        (id, source_id, deck_id, status, summary, created_at, updated_at)
@@ -1994,6 +2199,7 @@ export async function getTestCards({
   limit: number;
 }): Promise<StudyCard[]> {
   const db = await getDatabase();
+  const now = nowIso();
   const params: (string | number)[] = [];
   const deckFilter = deckId
     ? 'AND cards.deck_id = ?'
@@ -2017,8 +2223,9 @@ export async function getTestCards({
 
   if (deckId) params.push(deckId);
   else if (moduleId) params.push(moduleId);
-  if (scope === 'due') params.push(nowIso());
-  params.push(nowIso());
+  if (scope === 'due') params.push(now);
+  params.push(now);
+  params.push(now);
   params.push(limit === 0 ? 500 : normalizeLimit(limit, 100));
 
   const cards = await db.getAllAsync<StudyCard>(
@@ -2050,13 +2257,14 @@ export async function getTestCards({
      WHERE cards.deleted_at IS NULL
        AND decks.deleted_at IS NULL
        AND decks.archived_at IS NULL
+       AND cards.status != 'needs_review'
        AND COALESCE(card_learning_state.is_suspended, 0) = 0
        ${deckFilter}
        ${scopeFilter}
        AND (card_learning_state.buried_until IS NULL OR card_learning_state.buried_until <= ?)
      ORDER BY
        COALESCE(card_learning_state.weak_score, 0) DESC,
-       CASE WHEN memory_states.due_at <= '${nowIso()}' THEN 0 ELSE 1 END,
+       CASE WHEN memory_states.due_at <= ? THEN 0 ELSE 1 END,
        memory_states.due_at ASC,
        cards.updated_at DESC
      LIMIT ?`,
@@ -2069,12 +2277,14 @@ export async function getTestCards({
 export async function startTestSession({
   deckId,
   format,
+  direction,
   scope,
   questionLimit,
   questions,
 }: {
   deckId?: string;
   format: TestFormat;
+  direction: TestDirection;
   scope: TestScope;
   questionLimit: number;
   questions: TestQuestion[];
@@ -2091,12 +2301,13 @@ export async function startTestSession({
     );
     await txn.runAsync(
       `INSERT INTO test_sessions
-       (id, deck_id, format, scope, question_limit, total_count, answered_count, correct_count,
+       (id, deck_id, format, direction, scope, question_limit, total_count, answered_count, correct_count,
         questions_json, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 'active', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 'active', ?, ?)`,
       id,
       deckId ?? null,
       format,
+      direction,
       scope,
       questionLimit,
       questions.length,
@@ -2115,6 +2326,7 @@ export async function getLatestActiveTestSession(): Promise<ActiveTestSession | 
     deckId: string | null;
     deckTitle: string | null;
     format: TestFormat;
+    direction: TestDirection;
     scope: TestScope;
     questionLimit: number;
     totalCount: number;
@@ -2127,6 +2339,7 @@ export async function getLatestActiveTestSession(): Promise<ActiveTestSession | 
             test_sessions.deck_id AS deckId,
             decks.title AS deckTitle,
             test_sessions.format,
+            test_sessions.direction,
             test_sessions.scope,
             test_sessions.question_limit AS questionLimit,
             test_sessions.total_count AS totalCount,
@@ -2174,6 +2387,7 @@ export async function getLatestActiveTestSession(): Promise<ActiveTestSession | 
     deckId: row.deckId,
     deckTitle: row.deckTitle,
     format: row.format,
+    direction: row.direction,
     scope: row.scope,
     questionLimit: Number(row.questionLimit),
     totalCount: Number(row.totalCount),
@@ -2324,7 +2538,11 @@ function parseQuestionSnapshot(value: string): TestQuestion[] {
           candidate.card &&
           typeof candidate.card.id === 'string' &&
           Array.isArray(candidate.options) &&
-          (candidate.type === 'multiple-choice' || candidate.type === 'written-recall'),
+          (
+            candidate.type === 'multiple-choice' ||
+            candidate.type === 'written-recall' ||
+            candidate.type === 'true-false'
+          ),
       );
     });
   } catch {
@@ -2358,6 +2576,307 @@ export async function setCardFlagged(cardId: string, flagged: boolean) {
     cardId,
     flagged ? 1 : 0,
   );
+}
+
+export async function updateStudyCard(
+  cardId: string,
+  patch: { prompt: string; answer: string; qualityNotes?: string },
+) {
+  const prompt = patch.prompt.trim();
+  const answer = patch.answer.trim();
+  if (!prompt || !answer) {
+    throw new Error('Cards need both a front and a back.');
+  }
+
+  const db = await getDatabase();
+  const card = await db.getFirstAsync<{
+    deckId: string;
+    noteId: string | null;
+    status: StudyCard['status'];
+    evidenceCount: number;
+  }>(
+    `SELECT cards.deck_id AS deckId,
+            cards.note_id AS noteId,
+            cards.status,
+            COUNT(card_evidence.id) AS evidenceCount
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     LEFT JOIN card_evidence ON card_evidence.card_id = cards.id
+     WHERE cards.id = ?
+       AND cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL
+     GROUP BY cards.id, cards.deck_id, cards.note_id, cards.status`,
+    cardId,
+  );
+
+  if (!card) {
+    throw new Error('This card is no longer available.');
+  }
+
+  const sourceBacked = Number(card.evidenceCount ?? 0) > 0;
+  const nextStatus = sourceBacked ? 'needs_review' : card.status;
+  const notes =
+    patch.qualityNotes?.trim() ||
+    (sourceBacked
+      ? 'Edited wording needs source confirmation before study.'
+      : 'Card wording was edited manually.');
+  const now = nowIso();
+
+  await runWriteTransaction(db, async (txn) => {
+    await txn.runAsync(
+      'UPDATE cards SET prompt = ?, answer = ?, status = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+      prompt,
+      answer,
+      nextStatus,
+      now,
+      cardId,
+    );
+    if (card.noteId) {
+      await txn.runAsync(
+        'UPDATE notes SET title = ?, body = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        prompt,
+        answer,
+        now,
+        card.noteId,
+      );
+    }
+    await txn.runAsync(
+      `INSERT INTO card_quality (card_id, learning_objective, quality_score, quality_notes, checked_at)
+       VALUES (?, '', ?, ?, ?)
+       ON CONFLICT(card_id) DO UPDATE SET
+         quality_score = CASE
+           WHEN excluded.quality_score > 0 AND card_quality.quality_score > excluded.quality_score THEN excluded.quality_score
+           ELSE card_quality.quality_score
+         END,
+         quality_notes = excluded.quality_notes,
+         checked_at = excluded.checked_at`,
+      cardId,
+      sourceBacked ? 0.5 : 0,
+      notes,
+      now,
+    );
+    if (sourceBacked) {
+      await txn.runAsync(
+        `INSERT INTO card_learning_state (card_id, weak_score, is_flagged, is_suspended)
+         VALUES (?, 3, 1, 1)
+         ON CONFLICT(card_id) DO UPDATE SET
+           weak_score = MAX(card_learning_state.weak_score, 3),
+           is_flagged = 1,
+           is_suspended = 1`,
+        cardId,
+      );
+      await txn.runAsync(
+        "UPDATE card_evidence SET verification_status = 'needs-source-review' WHERE card_id = ?",
+        cardId,
+      );
+    }
+    await txn.runAsync('UPDATE decks SET updated_at = ? WHERE id = ?', now, card.deckId);
+    await upsertSearchIndex(txn, cardId);
+  });
+
+  return { needsSourceReview: sourceBacked };
+}
+
+export async function markCardNeedsSourceReview(cardId: string, studySessionId?: string) {
+  const db = await getDatabase();
+  const card = await db.getFirstAsync<{ id: string; deckId: string }>(
+    `SELECT cards.id, cards.deck_id AS deckId
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     WHERE cards.id = ?
+       AND cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL`,
+    cardId,
+  );
+
+  if (!card) {
+    throw new Error('This card is no longer available.');
+  }
+
+  const now = nowIso();
+  await runWriteTransaction(db, async (txn) => {
+    await txn.runAsync(
+      "UPDATE cards SET status = 'needs_review', updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+      now,
+      cardId,
+    );
+    await txn.runAsync(
+      `INSERT INTO card_learning_state (card_id, weak_score, is_flagged, is_suspended)
+       VALUES (?, 4, 1, 1)
+       ON CONFLICT(card_id) DO UPDATE SET
+         weak_score = MAX(card_learning_state.weak_score, 4),
+         is_flagged = 1,
+         is_suspended = 1`,
+      cardId,
+    );
+    await txn.runAsync(
+      `INSERT INTO card_quality (card_id, learning_objective, quality_score, quality_notes, checked_at)
+       VALUES (?, '', 0.25, 'Held for source review after the learner marked it confusing or unsafe.', ?)
+       ON CONFLICT(card_id) DO UPDATE SET
+         quality_score = CASE
+           WHEN card_quality.quality_score > 0 THEN MIN(card_quality.quality_score, excluded.quality_score)
+           ELSE excluded.quality_score
+         END,
+         quality_notes = excluded.quality_notes,
+         checked_at = excluded.checked_at`,
+      cardId,
+      now,
+    );
+    await txn.runAsync(
+      "UPDATE card_evidence SET verification_status = 'needs-source-review' WHERE card_id = ?",
+      cardId,
+    );
+    if (studySessionId) {
+      const held = await txn.runAsync(
+        `UPDATE study_session_items
+         SET status = 'held', completed_at = ?
+         WHERE session_id = ? AND card_id = ? AND status = 'pending'`,
+        now,
+        studySessionId,
+        cardId,
+      );
+      if (held.changes) {
+        await txn.runAsync(
+          `UPDATE study_sessions
+           SET total_count = MAX(completed_count, total_count - 1),
+               status = CASE
+                 WHEN completed_count >= MAX(completed_count, total_count - 1) THEN 'completed'
+                 ELSE status
+               END,
+               completed_at = CASE
+                 WHEN completed_count >= MAX(completed_count, total_count - 1) THEN ?
+                 ELSE completed_at
+               END,
+               updated_at = ?
+           WHERE id = ? AND status = 'active'`,
+          now,
+          now,
+          studySessionId,
+        );
+      }
+    }
+    await txn.runAsync(
+      `UPDATE test_sessions
+       SET status = 'abandoned', updated_at = ?
+       WHERE status = 'active' AND questions_json LIKE ?`,
+      now,
+      `%${cardId}%`,
+    );
+    await txn.runAsync('UPDATE decks SET updated_at = ? WHERE id = ?', now, card.deckId);
+    await upsertSearchIndex(txn, cardId);
+  });
+
+  return true;
+}
+
+export async function restoreCardFromSourceReview(cardId: string) {
+  const db = await getDatabase();
+  const evidence = await db.getFirstAsync<{
+    deckId: string;
+    evidenceCount: number;
+    curatedCount: number;
+    qualityNotes: string | null;
+  }>(
+    `SELECT
+       cards.deck_id AS deckId,
+       COUNT(card_evidence.id) AS evidenceCount,
+       SUM(CASE WHEN sources.sha256 = 'built-in-curated-demo-v1' THEN 1 ELSE 0 END) AS curatedCount,
+       card_quality.quality_notes AS qualityNotes
+     FROM cards
+     LEFT JOIN card_quality ON card_quality.card_id = cards.id
+     LEFT JOIN card_evidence ON card_evidence.card_id = cards.id
+     LEFT JOIN source_segments ON source_segments.id = card_evidence.segment_id
+     LEFT JOIN sources ON sources.id = source_segments.source_id
+     WHERE cards.id = ? AND cards.deleted_at IS NULL
+     GROUP BY cards.id, cards.deck_id, card_quality.quality_notes`,
+    cardId,
+  );
+  if (!evidence) {
+    throw new Error('This card is no longer available.');
+  }
+  const hasEvidence = Number(evidence?.evidenceCount ?? 0) > 0;
+  const editedDuringReview = Boolean(
+    evidence.qualityNotes &&
+      !evidence.qualityNotes.startsWith('Held for source review after'),
+  );
+  const isCurated = Number(evidence?.curatedCount ?? 0) > 0 && !editedDuringReview;
+  const nextStatus = isCurated ? 'verified' : hasEvidence ? 'source_extracted' : 'manual';
+  const nextEvidenceStatus = isCurated ? 'built-in-curated-demo' : 'user-approved-extractive';
+  const now = nowIso();
+
+  await runWriteTransaction(db, async (txn) => {
+    const restored = await txn.runAsync(
+      'UPDATE cards SET status = ?, updated_at = ? WHERE id = ? AND status = ? AND deleted_at IS NULL',
+      nextStatus,
+      now,
+      cardId,
+      'needs_review',
+    );
+    if (!restored.changes) {
+      throw new Error('This card is not waiting for source review.');
+    }
+    await txn.runAsync(
+      `INSERT INTO card_learning_state (card_id, weak_score, is_flagged, is_suspended)
+       VALUES (?, 0, 0, 0)
+       ON CONFLICT(card_id) DO UPDATE SET
+         weak_score = 0,
+         is_flagged = 0,
+         is_suspended = 0`,
+      cardId,
+    );
+    await txn.runAsync(
+      `UPDATE card_quality
+       SET quality_notes = 'Restored for study after source evidence was checked.',
+           checked_at = ?
+       WHERE card_id = ?`,
+      now,
+      cardId,
+    );
+    await txn.runAsync(
+      `UPDATE card_evidence
+       SET verification_status = ?
+       WHERE card_id = ? AND verification_status = 'needs-source-review'`,
+      nextEvidenceStatus,
+      cardId,
+    );
+    await txn.runAsync('UPDATE decks SET updated_at = ? WHERE id = ?', now, evidence.deckId);
+    await upsertSearchIndex(txn, cardId);
+  });
+
+  return true;
+}
+
+export async function getCardsNeedingSourceReview(): Promise<StudyCard[]> {
+  const db = await getDatabase();
+  const cards = await db.getAllAsync<StudyCard>(
+    `SELECT cards.id, cards.deck_id AS deckId, decks.title AS deckTitle,
+            cards.prompt, cards.answer, cards.card_type AS cardType, cards.status,
+            cards.is_starred AS isStarred, memory_states.due_at AS dueAt,
+            memory_states.fsrs_card_json AS fsrsCardJson,
+            memory_states.last_reviewed_at AS lastReviewedAt,
+            card_quality.learning_objective AS learningObjective,
+            card_quality.quality_score AS qualityScore,
+            card_quality.quality_notes AS qualityNotes,
+            COALESCE(card_learning_state.weak_score, 0) AS weakScore,
+            COALESCE(card_learning_state.is_flagged, 0) AS isFlagged,
+            COALESCE(card_learning_state.is_suspended, 0) AS isSuspended,
+            COALESCE(card_learning_state.is_leech, 0) AS isLeech,
+            COALESCE(card_learning_state.lapse_count, 0) AS lapseCount
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     JOIN memory_states ON memory_states.card_id = cards.id
+     LEFT JOIN card_quality ON card_quality.card_id = cards.id
+     LEFT JOIN card_learning_state ON card_learning_state.card_id = cards.id
+     WHERE cards.status = 'needs_review'
+       AND cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL
+     ORDER BY cards.updated_at DESC
+     LIMIT 100`,
+  );
+  return hydrateCards(cards);
 }
 
 export async function getLeechCards(): Promise<StudyCard[]> {
@@ -2412,6 +2931,18 @@ export async function recordCardReview(
     }
 
     await writeReviewState(txn, card, rating, responseTimeMs, studyMode, reviewedAt, false, studySessionId);
+    await txn.runAsync(
+      `INSERT INTO study_activity_events
+       (id, session_id, card_id, activity_mode, outcome, response_time_ms, affects_fsrs, occurred_at)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      createId('activity'),
+      studySessionId ?? null,
+      card.id,
+      studyMode === 'scheduled' ? 'fsrs' : studyMode,
+      rating,
+      Math.max(0, Math.round(responseTimeMs)),
+      reviewedAt,
+    );
     await updateLearningSafetyState(txn, card.id, rating, reviewedAt);
 
     if (studySessionId) {
@@ -2472,6 +3003,17 @@ export async function undoLastReview(cardId: string, studySessionId?: string) {
 
   await runWriteTransaction(db, async (txn) => {
     await txn.runAsync('UPDATE review_events SET reverted_at = ? WHERE id = ?', now, latestReview.id);
+    await txn.runAsync(
+      `UPDATE study_activity_events
+       SET reverted_at = ?
+       WHERE id = (
+         SELECT id FROM study_activity_events
+         WHERE card_id = ? AND affects_fsrs = 1 AND reverted_at IS NULL
+         ORDER BY occurred_at DESC LIMIT 1
+       )`,
+      now,
+      cardId,
+    );
 
     if (latestReview.rating === 'again') {
       await txn.runAsync(
@@ -2736,8 +3278,8 @@ export async function importCardsIntoDeck(deckId: string, rows: CardImportReadyR
         if (payload.cardType === 'cloze') {
           await upsertCardQuality(txn, cardId, {
             learningObjective: 'Recall the hidden concept in context.',
-            qualityScore: 0.82,
-            qualityNotes: 'Imported cloze card. Review source accuracy if this came from copied material.',
+            qualityScore: 0,
+            qualityNotes: 'Cloze structure checked. The imported fact has not been verified against a source.',
           }, now);
           result.clozeCardCount += 1;
         }
@@ -2794,6 +3336,238 @@ export async function exportDeckToCsv(deckId: string) {
   };
 }
 
+export async function exportCollectionCards({
+  courseId,
+  moduleId,
+  format,
+}: {
+  courseId?: string;
+  moduleId?: string;
+  format: 'csv' | 'tsv';
+}) {
+  if (Boolean(courseId) === Boolean(moduleId)) {
+    throw new Error('Choose one class or folder to export.');
+  }
+  const db = await getDatabase();
+  const scope = moduleId
+    ? await db.getFirstAsync<{ title: string }>(
+        `SELECT title FROM course_modules WHERE id = ?`,
+        moduleId,
+      )
+    : await db.getFirstAsync<{ title: string }>(
+        `SELECT title FROM courses WHERE id = ? AND deleted_at IS NULL`,
+        courseId!,
+      );
+  if (!scope) throw new Error('This collection is no longer available.');
+
+  const membership = moduleId
+    ? `SELECT deck_id FROM module_decks WHERE module_id = ?`
+    : `SELECT DISTINCT module_decks.deck_id
+       FROM module_decks
+       JOIN course_modules ON course_modules.id = module_decks.module_id
+       WHERE course_modules.course_id = ?`;
+  const rows = await db.getAllAsync<{ prompt: string; answer: string; cardType: string; deckTitle: string }>(
+    `SELECT cards.prompt, cards.answer, cards.card_type AS cardType, decks.title AS deckTitle
+     FROM cards
+     JOIN decks ON decks.id = cards.deck_id
+     WHERE cards.deck_id IN (${membership})
+       AND cards.deleted_at IS NULL
+       AND decks.deleted_at IS NULL
+       AND decks.archived_at IS NULL
+     ORDER BY decks.title ASC, cards.created_at ASC`,
+    moduleId ?? courseId!,
+  );
+  const extension = format;
+  return {
+    filename: `${safeExportName(scope.title)}-barion-cards.${extension}`,
+    cardCount: rows.length,
+    content: format === 'csv' ? exportCardsToCsv(rows) : exportCardsToTsv(rows),
+    mimeType: format === 'csv' ? 'text/csv' : 'text/tab-separated-values',
+  };
+}
+
+export async function copyDeck(deckId: string) {
+  const db = await getDatabase();
+  const sourceDeck = await db.getFirstAsync<{
+    title: string;
+    description: string;
+    color: string;
+    icon: string;
+  }>(
+    `SELECT title, description, color, icon
+     FROM decks
+     WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL`,
+    deckId,
+  );
+  if (!sourceDeck) throw new Error('This deck is not available to copy.');
+
+  const notes = await db.getAllAsync<{
+    id: string;
+    title: string;
+    body: string;
+    sourceId: string | null;
+  }>(
+    `SELECT id, title, body, source_id AS sourceId
+     FROM notes
+     WHERE deck_id = ? AND deleted_at IS NULL
+     ORDER BY created_at ASC`,
+    deckId,
+  );
+  const cards = await db.getAllAsync<{
+    id: string;
+    noteId: string | null;
+    cardType: string;
+    prompt: string;
+    answer: string;
+    status: string;
+    isStarred: number;
+  }>(
+    `SELECT id, note_id AS noteId, card_type AS cardType, prompt, answer, status,
+            is_starred AS isStarred
+     FROM cards
+     WHERE deck_id = ? AND deleted_at IS NULL
+     ORDER BY created_at ASC`,
+    deckId,
+  );
+  const evidenceRows = await db.getAllAsync<{
+    cardId: string;
+    segmentId: string;
+    evidenceText: string;
+    supportScore: number;
+    verificationStatus: string;
+  }>(
+    `SELECT card_id AS cardId, segment_id AS segmentId, evidence_text AS evidenceText,
+            support_score AS supportScore, verification_status AS verificationStatus
+     FROM card_evidence
+     WHERE card_id IN (SELECT id FROM cards WHERE deck_id = ? AND deleted_at IS NULL)`,
+    deckId,
+  );
+
+  const newDeckId = createId('deck');
+  const now = nowIso();
+  const noteIds = new Map<string, string>();
+
+  await runWriteTransaction(db, async (txn) => {
+    await txn.runAsync(
+      `INSERT INTO decks
+       (id, title, description, color, icon, created_at, updated_at, copied_from_deck_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      newDeckId,
+      `${sourceDeck.title} copy`,
+      sourceDeck.description,
+      sourceDeck.color,
+      sourceDeck.icon,
+      now,
+      now,
+      deckId,
+    );
+
+    await txn.runAsync(
+      `INSERT OR IGNORE INTO module_decks (module_id, deck_id, created_at)
+       SELECT module_id, ?, ? FROM module_decks WHERE deck_id = ?`,
+      newDeckId,
+      now,
+      deckId,
+    );
+
+    for (const note of notes) {
+      const newNoteId = createId('note');
+      noteIds.set(note.id, newNoteId);
+      await txn.runAsync(
+        `INSERT INTO notes (id, deck_id, title, body, source_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        newNoteId,
+        newDeckId,
+        note.title,
+        note.body,
+        note.sourceId,
+        now,
+        now,
+      );
+    }
+
+    for (const card of cards) {
+      const newCardId = createId('card');
+      const fallbackNoteId = createId('note');
+      const newNoteId = card.noteId ? noteIds.get(card.noteId) : null;
+      if (!newNoteId) {
+        await txn.runAsync(
+          `INSERT INTO notes (id, deck_id, title, body, source_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+          fallbackNoteId,
+          newDeckId,
+          compactTitle(card.prompt),
+          card.answer,
+          now,
+          now,
+        );
+      }
+      await txn.runAsync(
+        `INSERT INTO cards
+         (id, deck_id, note_id, card_type, prompt, answer, status, is_starred, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        newCardId,
+        newDeckId,
+        newNoteId ?? fallbackNoteId,
+        card.cardType,
+        card.prompt,
+        card.answer,
+        card.status,
+        Number(card.isStarred) ? 1 : 0,
+        now,
+        now,
+      );
+      const initial = createInitialFsrsCard(new Date(now));
+      await txn.runAsync(
+        `INSERT INTO memory_states
+         (card_id, initial_fsrs_card_json, fsrs_card_json, difficulty, stability, retrievability, due_at, last_reviewed_at, scheduler_version)
+         VALUES (?, ?, ?, NULL, NULL, NULL, ?, NULL, ?)`,
+        newCardId,
+        initial,
+        initial,
+        now,
+        schedulerVersion,
+      );
+
+      await txn.runAsync(
+        `INSERT INTO card_quality (card_id, learning_objective, quality_score, quality_notes, checked_at)
+         SELECT ?, learning_objective, quality_score, quality_notes, ?
+         FROM card_quality WHERE card_id = ?`,
+        newCardId,
+        now,
+        card.id,
+      );
+      for (const evidence of evidenceRows.filter((row) => row.cardId === card.id)) {
+        await txn.runAsync(
+          `INSERT INTO card_evidence
+           (id, card_id, segment_id, evidence_text, support_score, verification_status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          createId('ev'),
+          newCardId,
+          evidence.segmentId,
+          evidence.evidenceText,
+          Number(evidence.supportScore),
+          evidence.verificationStatus,
+          now,
+        );
+      }
+      await upsertSearchIndex(txn, newCardId);
+    }
+
+    await txn.runAsync(
+      `INSERT INTO sync_operations
+       (id, entity_type, entity_id, operation, payload_json, status, created_at)
+       VALUES (?, 'deck', ?, 'copy', ?, 'local-only', ?)`,
+      createId('sync'),
+      newDeckId,
+      JSON.stringify({ copiedFromDeckId: deckId, cardCount: cards.length, reviewHistoryCopied: false }),
+      now,
+    );
+  });
+
+  return { deckId: newDeckId, cardCount: cards.length };
+}
+
 function cardFingerprint(prompt: string, answer: string) {
   return `${normalizeCardText(prompt)}::${normalizeCardText(answer)}`;
 }
@@ -2811,6 +3585,89 @@ function compactTitle(value: string) {
 function safeExportName(value: string) {
   const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return cleaned || 'barion-deck';
+}
+
+async function upsertSourceStudyGuide(
+  db: WritableDatabase,
+  sourceId: string,
+  guide: GeneratedStudyGuide,
+  now: string,
+) {
+  const existing = await db.getFirstAsync<{ id: string; createdAt: string }>(
+    'SELECT id, created_at AS createdAt FROM source_study_guides WHERE source_id = ?',
+    sourceId,
+  );
+  const guideId = existing?.id ?? createId('guide');
+  await db.runAsync(
+    `INSERT INTO source_study_guides
+     (id, source_id, title, overview, outline_json, quick_reference_json, discussion_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id) DO UPDATE SET
+       title = excluded.title,
+       overview = excluded.overview,
+       outline_json = excluded.outline_json,
+       quick_reference_json = excluded.quick_reference_json,
+       discussion_json = excluded.discussion_json,
+       updated_at = excluded.updated_at`,
+    guideId,
+    sourceId,
+    guide.title,
+    guide.overview,
+    JSON.stringify(guide.outline),
+    JSON.stringify(guide.quickReference),
+    JSON.stringify(guide.discussionQuestions),
+    existing?.createdAt ?? now,
+    now,
+  );
+}
+
+function hydrateStudyGuide(row: SourceStudyGuideRow): SourceStudyGuide {
+  return {
+    id: row.id,
+    sourceId: row.sourceId,
+    title: row.title,
+    overview: row.overview,
+    outline: parseGuideArray<SourceStudyGuideSection>(row.outlineJson),
+    quickReference: parseGuideArray<SourceStudyGuideQuickReference>(row.quickReferenceJson),
+    discussionQuestions: parseGuideArray<SourceStudyGuideDiscussionQuestion>(row.discussionJson),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function fallbackStudyGuide(sourceId: string, title: string, segments: SourceSegment[]): SourceStudyGuide {
+  const generated = createStudyGuide(
+    segments.map((segment) => ({
+      id: segment.id,
+      locator: segment.locator,
+      sectionPath: segment.sectionPath,
+      text: segment.text,
+      startOffset: 0,
+      endOffset: segment.text.length,
+    })),
+    title,
+  );
+  const now = nowIso();
+  return {
+    id: `guide-${sourceId}`,
+    sourceId,
+    title: generated.title,
+    overview: generated.overview,
+    outline: generated.outline,
+    quickReference: generated.quickReference,
+    discussionQuestions: generated.discussionQuestions,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function parseGuideArray<T>(serialized: string): T[] {
+  try {
+    const parsed = JSON.parse(serialized);
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
 }
 
 async function processSource(sourceId: string, asset: SourceAssetInput) {
@@ -2838,6 +3695,7 @@ async function processSource(sourceId: string, asset: SourceAssetInput) {
     }
 
     const processedAt = nowIso();
+    const studyGuide = createStudyGuide(segments, source.title);
     await runWriteTransaction(db, async (txn) => {
       await txn.runAsync('DELETE FROM generation_jobs WHERE source_id = ?', sourceId);
       await txn.runAsync('DELETE FROM source_segments WHERE source_id = ?', sourceId);
@@ -2857,6 +3715,8 @@ async function processSource(sourceId: string, asset: SourceAssetInput) {
           processedAt,
         );
       }
+
+      await upsertSourceStudyGuide(txn, sourceId, studyGuide, processedAt);
 
       await txn.runAsync(
         `UPDATE sources
@@ -2890,6 +3750,8 @@ function hydrateSource(source: SourceItem): SourceItem {
     sourceCardCount: Number(source.sourceCardCount ?? 0),
     autoGeneratedCardCount: Number(source.autoGeneratedCardCount ?? 0),
     autoGeneratedReviewedCardCount: Number(source.autoGeneratedReviewedCardCount ?? 0),
+    needsReviewCardCount: Number(source.needsReviewCardCount ?? 0),
+    verifiedCardCount: Number(source.verifiedCardCount ?? 0),
     reviewedCardCount: Number(source.reviewedCardCount ?? 0),
     sizeBytes: source.sizeBytes == null ? null : Number(source.sizeBytes),
   };

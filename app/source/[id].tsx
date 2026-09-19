@@ -18,6 +18,7 @@ import {
   generateDraftsForSource,
   getSourceDetail,
   rejectCandidate,
+  refreshStudyGuideForSource,
   retrySourceProcessing,
   updateCandidateDraft,
 } from '@/storage/repository';
@@ -26,6 +27,7 @@ import { colors, fonts, radii } from '@/theme/colors';
 const pipelineSteps = [
   { label: 'Imported', icon: 'cloud-done-outline' as const },
   { label: 'Extracted', icon: 'scan-outline' as const },
+  { label: 'Guide', icon: 'book-outline' as const },
   { label: 'Cards built', icon: 'sparkles-outline' as const },
   { label: 'Ready', icon: 'play-circle-outline' as const },
 ];
@@ -39,6 +41,7 @@ export default function SourceDetailScreen() {
   const [draftQuestion, setDraftQuestion] = useState('');
   const [draftAnswer, setDraftAnswer] = useState('');
   const [showSourceDetails, setShowSourceDetails] = useState(false);
+  const [showFullGuide, setShowFullGuide] = useState(false);
   const [confirmation, setConfirmation] = useState<'cards' | 'source' | null>(null);
 
   const applyLoadedData = useCallback((detail: SourceDetail | null) => {
@@ -144,7 +147,21 @@ export default function SourceDetailScreen() {
   const statusMeta = getSourceStatusMeta(source.status);
   const isBusy = source.status === 'importing' || source.status === 'parsing' || source.status === 'generating';
   const canRetry = source.status === 'action-required' || source.status === 'failed';
-  const pipelineStage = source.status === 'ready' ? 4 : pendingCandidates.length ? 3 : source.segmentCount ? 2 : 1;
+  const hasGuide = Boolean(source.studyGuide?.outline.length || source.studyGuide?.quickReference.length);
+  const pipelineStage = source.status === 'ready'
+    ? 5
+    : source.sourceCardCount || pendingCandidates.length
+      ? 4
+      : hasGuide
+        ? 3
+        : source.segmentCount
+          ? 2
+          : 1;
+  const readyCardCount = Math.max(0, source.sourceCardCount - source.needsReviewCardCount);
+  const guide = source.studyGuide;
+  const visibleOutline = guide ? guide.outline.slice(0, showFullGuide ? guide.outline.length : 4) : [];
+  const visibleQuickReference = guide ? guide.quickReference.slice(0, showFullGuide ? guide.quickReference.length : 8) : [];
+  const visibleQuestions = guide ? guide.discussionQuestions.slice(0, showFullGuide ? guide.discussionQuestions.length : 3) : [];
 
   return (
     <>
@@ -189,7 +206,7 @@ export default function SourceDetailScreen() {
         <View style={styles.pipeline}>
           {pipelineSteps.map((step, index) => {
             const complete = index < pipelineStage;
-            const current = index === pipelineStage && pipelineStage < 4;
+            const current = index === pipelineStage && pipelineStage < pipelineSteps.length;
             return (
               <View key={step.label} style={styles.pipelineStep}>
                 <View style={[styles.pipelineIcon, complete && styles.pipelineIconComplete, current && styles.pipelineIconCurrent]}>
@@ -218,6 +235,118 @@ export default function SourceDetailScreen() {
         {isBusy ? <Text style={styles.busyNote}>Keep Barion open until this local processing step finishes.</Text> : null}
       </View>
 
+      {guide ? (
+        <View style={styles.guidePanel}>
+          <View style={styles.guideHeader}>
+            <View style={styles.guideIcon}>
+              <Ionicons name="book-outline" size={25} color={colors.surface} />
+            </View>
+            <View style={styles.guideCopy}>
+              <Text style={styles.eyebrow}>STUDY GUIDE FIRST</Text>
+              <Text style={styles.guideTitle}>{guide.title}</Text>
+              <Text style={styles.bodyText}>{guide.overview}</Text>
+            </View>
+          </View>
+
+          <View style={styles.guideActions}>
+            <AppButton
+              disabled={!readyCardCount}
+              icon="albums-outline"
+              label="Flashcards"
+              onPress={() => router.push({ pathname: '/study', params: { deckId: source.defaultDeckId! } })}
+            />
+            <AppButton
+              disabled={!readyCardCount}
+              icon="help-circle-outline"
+              label="Practice questions"
+              variant="secondary"
+              onPress={() => router.push({
+                pathname: '/test',
+                params: {
+                  autoStart: '1',
+                  deckId: source.defaultDeckId!,
+                  direction: 'front-to-back',
+                  format: 'clinical',
+                  scope: 'all',
+                },
+              })}
+            />
+            <AppButton
+              disabled={actionId === 'guide'}
+              icon="refresh-outline"
+              label={actionId === 'guide' ? 'Refreshing...' : 'Refresh guide'}
+              variant="quiet"
+              onPress={() => void runAction('guide', () => refreshStudyGuideForSource(source.id))}
+            />
+          </View>
+
+          {visibleOutline.length ? (
+            <View style={styles.guideBlock}>
+              <View style={styles.guideBlockHeading}>
+                <Text style={styles.guideBlockTitle}>Outline</Text>
+                <Text style={styles.guideCount}>{guide.outline.length}</Text>
+              </View>
+              {visibleOutline.map((section) => (
+                <View key={section.id} style={styles.outlineSection}>
+                  <View style={styles.outlineTitleRow}>
+                    <View style={[styles.emphasisDot, emphasisDotStyle(section.emphasis)]} />
+                    <Text style={styles.outlineTitle}>{section.title}</Text>
+                  </View>
+                  {section.bullets.map((bullet, index) => (
+                    <View key={`${section.id}-${index}`} style={styles.bulletRow}>
+                      <View style={styles.bulletDot} />
+                      <Text style={styles.bulletText}>{bullet}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {visibleQuickReference.length ? (
+            <View style={styles.guideBlock}>
+              <View style={styles.guideBlockHeading}>
+                <Text style={styles.guideBlockTitle}>Quick reference</Text>
+                <Text style={styles.guideCount}>{guide.quickReference.length}</Text>
+              </View>
+              <View style={styles.referenceGrid}>
+                {visibleQuickReference.map((item) => (
+                  <View key={item.id} style={styles.referenceItem}>
+                    <Text style={styles.referenceTerm}>{item.term}</Text>
+                    <Text style={styles.referenceDetail}>{item.detail}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {visibleQuestions.length ? (
+            <View style={styles.guideBlock}>
+              <View style={styles.guideBlockHeading}>
+                <Text style={styles.guideBlockTitle}>Discussion questions</Text>
+                <Text style={styles.guideCount}>{guide.discussionQuestions.length}</Text>
+              </View>
+              {visibleQuestions.map((question) => (
+                <View key={question.id} style={styles.discussionItem}>
+                  <View style={styles.discussionTopline}>
+                    <Text style={styles.discussionPrompt}>{question.prompt}</Text>
+                    <Text style={styles.difficultyPill}>{question.difficulty}</Text>
+                  </View>
+                  <Text style={styles.discussionAnswer}>{question.answer}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {guide.outline.length > 4 || guide.quickReference.length > 8 || guide.discussionQuestions.length > 3 ? (
+            <Pressable accessibilityRole="button" onPress={() => setShowFullGuide((value) => !value)} style={styles.expandGuide}>
+              <Text style={styles.expandGuideText}>{showFullGuide ? 'Show less' : 'Show complete guide'}</Text>
+              <Ionicons name={showFullGuide ? 'chevron-up' : 'chevron-down'} size={18} color={colors.blueDark} />
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
       {source.defaultDeckId ? (
         <View style={styles.studySetCard}>
           <View style={styles.studySetIcon}>
@@ -226,29 +355,54 @@ export default function SourceDetailScreen() {
           <View style={styles.studySetCopy}>
             <Text style={styles.eyebrow}>AUTOMATIC STUDY SET</Text>
             <Text style={styles.studySetTitle}>{source.defaultDeckTitle || source.title}</Text>
-            <Text style={styles.bodyText}>{source.sourceCardCount} source-grounded cards · organized automatically</Text>
+            <Text style={styles.bodyText}>
+              {readyCardCount} ready card{readyCardCount === 1 ? '' : 's'} · {source.needsReviewCardCount} held for source check
+            </Text>
           </View>
           <AppButton
-            disabled={!source.sourceCardCount}
+            disabled={!readyCardCount}
             icon="play"
             label="Start studying"
             onPress={() => router.push({ pathname: '/study', params: { deckId: source.defaultDeckId! } })}
           />
           <AppButton
-            disabled={!source.sourceCardCount}
+            disabled={!readyCardCount}
             icon="school-outline"
             label="Test this source"
             variant="secondary"
-            onPress={() => router.push({ pathname: '/test', params: { deckId: source.defaultDeckId! } })}
+            onPress={() => router.push({ pathname: '/test', params: { deckId: source.defaultDeckId!, scope: 'all' } })}
           />
+        </View>
+      ) : null}
+
+      {source.needsReviewCardCount ? (
+        <View style={styles.sourceCheckPanel}>
+          <View style={styles.sourceCheckIcon}>
+            <Ionicons name="alert-circle-outline" size={22} color="#9a5b09" />
+          </View>
+          <View style={styles.sourceCheckCopy}>
+            <Text style={styles.cardTitle}>Some cards are held for source check</Text>
+            <Text style={styles.bodyText}>
+              These cards are hidden from study and tests until their wording is checked against the source evidence.
+            </Text>
+          </View>
+          {source.defaultDeckId ? (
+            <AppButton
+              icon="open-outline"
+              label="Open set"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/deck/[id]', params: { id: source.defaultDeckId! } })}
+            />
+          ) : null}
         </View>
       ) : null}
 
       <View style={styles.factGrid}>
         <Fact icon="albums-outline" label="Study cards" value={String(source.sourceCardCount)} />
-        <Fact icon="alert-circle-outline" label="Needs attention" value={String(pendingCandidates.length)} />
+        <Fact icon="shield-checkmark-outline" label="Verified cards" value={String(source.verifiedCardCount)} />
+        <Fact icon="alert-circle-outline" label="Source checks" value={String(source.needsReviewCardCount)} />
+        <Fact icon="create-outline" label="Needs attention" value={String(pendingCandidates.length)} />
         <Fact icon="document-text-outline" label="Source sections" value={String(source.segmentCount)} />
-        <Fact icon="archive-outline" label="File size" value={formatBytes(source.sizeBytes)} />
       </View>
 
       {pendingCandidates.length ? (
@@ -484,6 +638,22 @@ function formatCardType(cardType: string) {
   return cardType.replace(/-/g, ' ');
 }
 
+function emphasisDotStyle(emphasis: 'overview' | 'definition' | 'clinical' | 'treatment' | 'safety') {
+  switch (emphasis) {
+    case 'clinical':
+      return styles.clinicalDot;
+    case 'definition':
+      return styles.definitionDot;
+    case 'safety':
+      return styles.safetyDot;
+    case 'treatment':
+      return styles.treatmentDot;
+    case 'overview':
+    default:
+      return styles.overviewDot;
+  }
+}
+
 function Fact({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }) {
   return (
     <View style={styles.fact}>
@@ -529,15 +699,25 @@ const styles = StyleSheet.create({
   documentIcon: { alignItems: 'center', backgroundColor: colors.surface, borderRadius: 17, height: 58, justifyContent: 'center', width: 58 },
   duplicateCopy: { flex: 1, gap: 2 },
   duplicateNotice: { alignItems: 'center', backgroundColor: '#eaf8f2', borderColor: '#b9e2d4', borderRadius: radii.md, borderWidth: 1, flexDirection: 'row', gap: 10, padding: 13 },
+  clinicalDot: { backgroundColor: colors.blue },
+  definitionDot: { backgroundColor: colors.indigo },
+  difficultyPill: { backgroundColor: colors.surfaceMuted, borderRadius: radii.pill, color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, overflow: 'hidden', paddingHorizontal: 9, paddingVertical: 5 },
+  discussionAnswer: { color: colors.muted, fontFamily: fonts.regular, fontSize: 12, lineHeight: 19 },
+  discussionItem: { borderTopColor: colors.line, borderTopWidth: 1, gap: 7, paddingTop: 11 },
+  discussionPrompt: { color: colors.ink, flex: 1, fontFamily: fonts.bold, fontSize: 14, lineHeight: 20 },
+  discussionTopline: { alignItems: 'flex-start', flexDirection: 'row', gap: 8, justifyContent: 'space-between' },
   editWarning: { color: '#9a5b09', fontFamily: fonts.medium, fontSize: 11, lineHeight: 17 },
   editor: { gap: 8 },
   editorInput: { backgroundColor: colors.canvas, borderColor: colors.lineStrong, borderRadius: radii.sm, borderWidth: 1, color: colors.ink, fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, minHeight: 76, padding: 12, textAlignVertical: 'top' },
+  emphasisDot: { borderRadius: radii.pill, height: 9, marginTop: 6, width: 9 },
   emptySegment: { alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.md, borderStyle: 'dashed', borderWidth: 1, flexDirection: 'row', gap: 10, padding: 18 },
   evidenceLabel: { color: colors.tealDark, flex: 1, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.55 },
   evidencePanel: { backgroundColor: colors.surfaceTeal, borderRadius: radii.md, gap: 8, padding: 14 },
   evidenceText: { color: colors.inkSoft, fontFamily: fonts.regular, fontSize: 12, lineHeight: 19 },
   evidenceTopline: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   eyebrow: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 1.25 },
+  expandGuide: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 5, minHeight: 38, paddingRight: 8 },
+  expandGuideText: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 13 },
   fact: { alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, flex: 1, flexBasis: 180, flexDirection: 'row', gap: 11, minWidth: 145, padding: 14 },
   factGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
   factLabel: { color: colors.muted, fontFamily: fonts.medium, fontSize: 10 },
@@ -549,6 +729,16 @@ const styles = StyleSheet.create({
   filename: { color: colors.inkSoft, fontFamily: fonts.medium, fontSize: 12 },
   groundedBadge: { alignItems: 'center', backgroundColor: colors.surfaceTeal, borderRadius: radii.pill, flexDirection: 'row', gap: 5, paddingHorizontal: 9, paddingVertical: 6 },
   groundedText: { color: colors.tealDark, fontFamily: fonts.bold, fontSize: 10 },
+  guideActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  guideBlock: { gap: 11 },
+  guideBlockHeading: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  guideBlockTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 16 },
+  guideCopy: { flex: 1, gap: 5, minWidth: 220 },
+  guideCount: { backgroundColor: colors.surfaceMuted, borderRadius: radii.pill, color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, minWidth: 30, overflow: 'hidden', paddingHorizontal: 9, paddingVertical: 5, textAlign: 'center' },
+  guideHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 14 },
+  guideIcon: { alignItems: 'center', backgroundColor: colors.indigo, borderRadius: 15, height: 52, justifyContent: 'center', width: 52 },
+  guidePanel: { backgroundColor: colors.surface, borderColor: colors.lineStrong, borderRadius: radii.lg, borderWidth: 1, gap: 17, padding: 18 },
+  guideTitle: { color: colors.ink, fontFamily: fonts.extraBold, fontSize: 22, lineHeight: 29 },
   hash: { color: colors.muted, fontFamily: fonts.medium, fontSize: 10, lineHeight: 16 },
   headingCopy: { flex: 1, gap: 4, minWidth: 220 },
   hero: { alignItems: 'flex-start', backgroundColor: colors.surfaceMuted, borderRadius: radii.lg, flexDirection: 'row', gap: 15, padding: 20 },
@@ -563,6 +753,10 @@ const styles = StyleSheet.create({
   noDeckPanel: { alignItems: 'center', backgroundColor: colors.warningSurface, borderRadius: radii.md, flexDirection: 'row', flexWrap: 'wrap', gap: 12, padding: 14 },
   objectivePanel: { alignItems: 'center', backgroundColor: colors.warningSurface, borderRadius: radii.md, flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
   objectiveText: { color: colors.inkSoft, flex: 1, fontFamily: fonts.semibold, fontSize: 12, lineHeight: 18 },
+  outlineSection: { gap: 8 },
+  outlineTitle: { color: colors.ink, flex: 1, fontFamily: fonts.bold, fontSize: 15, lineHeight: 21 },
+  outlineTitleRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 9 },
+  overviewDot: { backgroundColor: colors.slate },
   pipeline: { flexDirection: 'row', justifyContent: 'space-between' },
   pipelineIcon: { alignItems: 'center', backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.pill, borderWidth: 1, height: 32, justifyContent: 'center', width: 32 },
   pipelineIconComplete: { backgroundColor: colors.teal, borderColor: colors.teal },
@@ -576,6 +770,11 @@ const styles = StyleSheet.create({
   question: { color: colors.ink, fontFamily: fonts.bold, fontSize: 19, lineHeight: 27 },
   qualityBadge: { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: radii.pill, flexDirection: 'row', gap: 4, paddingHorizontal: 8, paddingVertical: 6 },
   qualityBadgeText: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10 },
+  referenceDetail: { color: colors.muted, fontFamily: fonts.regular, fontSize: 11, lineHeight: 17 },
+  referenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  referenceItem: { backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.sm, borderWidth: 1, flex: 1, gap: 4, minWidth: 210, padding: 11 },
+  referenceTerm: { color: colors.ink, fontFamily: fonts.bold, fontSize: 13, lineHeight: 18 },
+  safetyDot: { backgroundColor: colors.coral },
   section: { gap: 11 },
   sectionHeading: { alignItems: 'flex-end', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   sectionTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 20, lineHeight: 27 },
@@ -585,10 +784,16 @@ const styles = StyleSheet.create({
   segmentText: { color: colors.inkSoft, fontFamily: fonts.regular, fontSize: 13, lineHeight: 21 },
   segmentTopline: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   smallText: { color: colors.muted, flex: 1, fontFamily: fonts.regular, fontSize: 12, lineHeight: 19 },
+  bulletDot: { backgroundColor: colors.lineStrong, borderRadius: radii.pill, height: 5, marginTop: 8, width: 5 },
+  bulletRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 9, paddingLeft: 18 },
+  bulletText: { color: colors.inkSoft, flex: 1, fontFamily: fonts.regular, fontSize: 13, lineHeight: 20 },
   sourceDetailsContent: { gap: 11, padding: 15, paddingTop: 4 },
   sourceDetailsLabel: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 10 },
   sourceDetailsPanel: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, overflow: 'hidden' },
   sourceDetailsToggle: { alignItems: 'center', flexDirection: 'row', gap: 12, justifyContent: 'space-between', minHeight: 64, paddingHorizontal: 15 },
+  sourceCheckCopy: { flex: 1, gap: 3, minWidth: 220 },
+  sourceCheckIcon: { alignItems: 'center', backgroundColor: colors.warningSurface, borderRadius: 13, height: 46, justifyContent: 'center', width: 46 },
+  sourceCheckPanel: { alignItems: 'center', backgroundColor: colors.warningSurface, borderColor: '#efd59f', borderRadius: radii.md, borderWidth: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 12, padding: 14 },
   statusCard: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.lg, borderWidth: 1, gap: 15, padding: 18 },
   statusCopy: { flex: 1, gap: 3 },
   statusHeader: { alignItems: 'flex-start', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
@@ -597,6 +802,7 @@ const styles = StyleSheet.create({
   studySetIcon: { alignItems: 'center', backgroundColor: colors.blue, borderRadius: 16, height: 54, justifyContent: 'center', width: 54 },
   studySetTitle: { color: colors.ink, fontFamily: fonts.extraBold, fontSize: 19, lineHeight: 26 },
   title: { color: colors.ink, fontFamily: fonts.extraBold, fontSize: 27, lineHeight: 34 },
+  treatmentDot: { backgroundColor: colors.teal },
   typeBadge: { backgroundColor: colors.ink, borderRadius: radii.pill, paddingHorizontal: 10, paddingVertical: 6 },
   typeBadgeText: { color: colors.surface, fontFamily: fonts.bold, fontSize: 10, textTransform: 'uppercase' },
 });

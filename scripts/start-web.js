@@ -71,5 +71,5 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 proxy.listen(publicPort, '0.0.0.0', () => {
-  console.log(`Barion web: http://localhost:${publicPort}`);
+  console.log(`Barion web: http://127.0.0.1:${publicPort}`);
 });

@@ -1,4 +1,5 @@
 import type { ParsedSegment } from './types';
+import type { ExamGoal, ReviewStyle, StudyDifficulty } from '@/domain/types';
 
 export type MedicalCardType =
   | 'definition'
@@ -25,6 +26,12 @@ export type ExtractiveDraft = {
   evidenceText: string;
 };
 
+export type DraftGenerationPreferences = {
+  reviewStyle: ReviewStyle;
+  difficulty: StudyDifficulty;
+  examGoal: ExamGoal;
+};
+
 type DraftSeed = {
   cardType: MedicalCardType;
   focusKey: string;
@@ -42,7 +49,7 @@ type ScoredDraft = ExtractiveDraft & {
 
 const MAX_DRAFTS = 56;
 const MAX_DRAFTS_PER_SEGMENT = 8;
-const MAX_ANSWER_CHARS = 560;
+const MAX_ANSWER_CHARS = 700;
 const MAX_EVIDENCE_CHARS = 720;
 const MIN_QUALITY_SCORE = 0.68;
 export const AUTO_PUBLISH_QUALITY_SCORE = 0.82;
@@ -75,23 +82,42 @@ const MEDICAL_TERMS = [
   'adverse',
   'alveoli',
   'anatomy',
+  'akathisia',
+  'alcohol withdrawal',
+  'alogia',
+  'anhedonia',
   'antibiotic',
   'antibody',
+  'antipsychotic',
+  'anxiety',
   'artery',
   'assessment',
+  'avolition',
+  'benzodiazepine',
+  'bipolar disorder',
   'contraindicated',
   'contraindication',
   'clot',
+  'delirium',
+  'delusion',
+  'dementia',
+  'depression',
   'diagnosis',
   'diabetes',
   'disease',
+  'dopamine',
   'dose',
   'drug',
+  'dyskinesia',
   'edema',
+  'electroconvulsive therapy',
   'endocrine',
   'enzyme',
   'estrogen',
+  'extrapyramidal',
+  'flumazenil',
   'glucose',
+  'hallucination',
   'heart',
   'hepatic',
   'hormone',
@@ -104,34 +130,58 @@ const MEDICAL_TERMS = [
   'kidney',
   'lab',
   'lesion',
+  'lithium',
   'liver',
   'management',
+  'mania',
+  'major depressive disorder',
   'mechanism',
   'medication',
   'menstrual',
   'menstruation',
   'metformin',
   'metabolism',
+  'myocardial',
+  'naloxone',
+  'neuroleptic malignant syndrome',
   'neuron',
+  'norepinephrine',
+  'nursing',
+  'obsessive-compulsive disorder',
   'oral contraceptive',
   'ovarian',
   'ovary',
   'ovulation',
+  'oxygen',
+  'pathology',
   'pathophysiology',
   'pcos',
   'pharmacology',
+  'plasma',
   'physiology',
+  'preload',
   'pregnancy',
+  'pressure',
   'progesterone',
+  'pulmonary',
   'receptor',
   'renal',
+  'respiratory',
   'risk',
+  'schizoaffective disorder',
+  'schizophrenia',
+  'serotonin',
+  'serotonin syndrome',
+  'sinoatrial node',
+  'somatic symptom disorder',
   'symptom',
   'syndrome',
+  'tardive dyskinesia',
   'therapy',
   'thrombosis',
   'treatment',
   'toxicity',
+  'tricyclic antidepressant',
   'type 2 diabetes',
   'vein',
 ];
@@ -153,16 +203,53 @@ const LOW_VALUE_SUBJECTS = new Set([
   'those',
   'we',
   'you',
+  'condition',
+  'conditions',
+  'disease',
+  'diseases',
+  'disorder',
+  'disorders',
+  'problem',
+  'problems',
+  'sign',
+  'signs',
+  'symptom',
+  'symptoms',
+  'treatment',
+  'treatments',
 ]);
 
-export function createExtractiveDrafts(segments: ParsedSegment[]): ExtractiveDraft[] {
+const GENERIC_CLOZE_TERMS = new Set([
+  'assessment',
+  'condition',
+  'contraindication',
+  'diagnosis',
+  'disease',
+  'dose',
+  'drug',
+  'management',
+  'mechanism',
+  'medication',
+  'nursing',
+  'risk',
+  'symptom',
+  'syndrome',
+  'therapy',
+  'toxicity',
+  'treatment',
+]);
+
+export function createExtractiveDrafts(
+  segments: ParsedSegment[],
+  preferences?: DraftGenerationPreferences,
+): ExtractiveDraft[] {
   const drafts: ExtractiveDraft[] = [];
   const seen = new Set<string>();
 
   for (const segment of segments) {
     if (drafts.length >= MAX_DRAFTS) break;
 
-    const segmentDrafts = createSegmentDrafts(segment);
+    const segmentDrafts = createSegmentDrafts(segment, preferences);
     for (const draft of segmentDrafts) {
       if (drafts.length >= MAX_DRAFTS) break;
 
@@ -188,7 +275,7 @@ export function createExtractiveDrafts(segments: ParsedSegment[]): ExtractiveDra
   return drafts;
 }
 
-function createSegmentDrafts(segment: ParsedSegment): ScoredDraft[] {
+function createSegmentDrafts(segment: ParsedSegment, preferences?: DraftGenerationPreferences): ScoredDraft[] {
   const text = normalizeSourceText(segment.text);
   if (text.length < 80 || isMostlyReferenceText(text)) {
     return [];
@@ -218,7 +305,7 @@ function createSegmentDrafts(segment: ParsedSegment): ScoredDraft[] {
   return seeds
     .map((seed) => scoreDraft(segment, sentences, seed))
     .filter((draft): draft is ScoredDraft => Boolean(draft))
-    .sort((left, right) => selectionScore(right) - selectionScore(left))
+    .sort((left, right) => selectionScore(right, preferences) - selectionScore(left, preferences))
     .reduce<ScoredDraft[]>((unique, draft) => {
       const key = normalizeKey(`${draft.cardType}:${draft.focusKey}:${draft.question}`);
       const answerKey = recallAnswerKey(draft.answer);
@@ -253,7 +340,7 @@ function createDefinitionSeeds(segment: ParsedSegment, sentences: string[], inde
       cardType: 'definition',
       focusKey: subject,
       sourceIndex: index,
-      question: `What does ${questionConcept(subject)} mean in this topic?`,
+      question: `What is ${questionConcept(subject)}?`,
       directAnswer: `${capitalize(subject)} ${definitionVerb(match[2])} ${definition}`,
       whyItMatters: 'This gives the learner a stable anchor before connecting mechanisms, findings, and management.',
       learningObjective: `Define ${subject} and connect it to the section "${sectionLabel(segment)}".`,
@@ -486,7 +573,7 @@ function createDiagnosticSeeds(segment: ParsedSegment, sentences: string[], inde
     cardType: 'diagnostic-reasoning',
     focusKey: `${topic}:diagnosis`,
     sourceIndex: index,
-    question: `Which evidence supports the diagnosis of ${questionConcept(topic)}?`,
+      question: `What are the diagnostic criteria for ${questionConcept(topic)}?`,
     directAnswer: `${capitalize(topic)} is supported by ${criteria}`,
     whyItMatters: 'Diagnostic cards connect findings to a conclusion without inventing facts beyond the source.',
     learningObjective: `Recall the source criteria used to identify ${topic}.`,
@@ -537,7 +624,7 @@ function createClozeSeeds(sentences: string[], index: number): DraftSeed[] {
 
 function scoreDraft(segment: ParsedSegment, sentences: string[], seed: DraftSeed): ScoredDraft | null {
   const evidenceText = focusedEvidence(sentences, seed.sourceIndex);
-  const answer = formatAnswer(seed.directAnswer, seed.whyItMatters, segment.locator);
+  const answer = formatAnswer(seed, segment.locator);
   const combined = `${segment.sectionPath} ${seed.question} ${answer} ${evidenceText}`;
   const evidenceCoverage = sourceEvidenceCoverage(seed.directAnswer, evidenceText);
   let score = 0.28;
@@ -545,7 +632,7 @@ function scoreDraft(segment: ParsedSegment, sentences: string[], seed: DraftSeed
   score += Math.min(countMedicalSignals(combined) * 0.035, 0.16);
   score += seed.cardType === 'cloze-recall' ? 0.04 : 0.1;
   score += /^(how|why|which|when|fill)\b/i.test(seed.question) ? 0.08 : 0;
-  score += answer.length >= 70 && answer.length <= MAX_ANSWER_CHARS ? 0.07 : -0.1;
+  score += answer.length >= 3 && answer.length <= MAX_ANSWER_CHARS ? 0.07 : -0.1;
   score += evidenceText.length >= 80 && evidenceText.length <= MAX_EVIDENCE_CHARS ? 0.06 : -0.08;
   score += segment.sectionPath && segment.sectionPath !== segment.locator ? 0.03 : 0;
   score += seed.learningObjective ? 0.04 : 0;
@@ -578,12 +665,39 @@ function scoreDraft(segment: ParsedSegment, sentences: string[], seed: DraftSeed
   };
 }
 
-function formatAnswer(directAnswer: string, whyItMatters: string, locator: string) {
-  return [
-    `Answer: ${ensureSentence(cleanClause(directAnswer))}`,
-    `Why it matters: ${ensureSentence(whyItMatters)}`,
-    `Source linked: ${locator}.`,
-  ].join('\n');
+function formatAnswer(seed: DraftSeed, _locator: string) {
+  return trimToSentence(cleanClause(seed.directAnswer), 220);
+}
+
+function answerFocus(seed: DraftSeed) {
+  const focus = cleanClause(seed.focusKey.replace(/:/g, ' -> '));
+  const conciseFocus = trimToWords(focus, 14);
+
+  switch (seed.cardType) {
+    case 'contraindication':
+      return ensureSentence(`Avoidance rule and reason for ${conciseFocus}`);
+    case 'diagnostic-reasoning':
+      return ensureSentence(`Evidence that supports diagnosis of ${conciseFocus.replace(/\s*->\s*diagnosis$/i, '')}`);
+    case 'treatment-reasoning':
+      return ensureSentence(`Management decision point for ${conciseFocus.replace(/\s*->\s*treatment$/i, '')}`);
+    case 'algorithm-step':
+      return ensureSentence(`Correct order of steps for ${conciseFocus.replace(/\s*->\s*sequence$/i, '')}`);
+    case 'comparison':
+      return ensureSentence(`Difference between ${conciseFocus}`);
+    case 'classification':
+      return ensureSentence(`Category relationship: ${conciseFocus}`);
+    case 'mechanism':
+      return ensureSentence(`Cause-and-effect link: ${conciseFocus}`);
+    case 'clinical-finding':
+      return ensureSentence(`Recognition pattern for ${conciseFocus.replace(/\s*->\s*findings$/i, '')}`);
+    case 'risk-factor':
+      return ensureSentence(`Risk link: ${conciseFocus}`);
+    case 'cloze-recall':
+      return ensureSentence(`Exact term retrieval in context`);
+    case 'definition':
+    default:
+      return ensureSentence(`Stable anchor concept: ${conciseFocus}`);
+  }
 }
 
 function focusedEvidence(sentences: string[], index: number) {
@@ -769,7 +883,10 @@ function sectionLabel(segment: ParsedSegment) {
 function findBestClozeTerm(sentence: string) {
   const lower = sentence.toLowerCase();
   const sortedTerms = [...MEDICAL_TERMS].sort((left, right) => right.length - left.length);
-  const term = sortedTerms.find((candidate) => new RegExp(`\\b${escapeRegExp(candidate)}\\b`, 'i').test(lower));
+  const term = sortedTerms.find((candidate) => {
+    if (GENERIC_CLOZE_TERMS.has(candidate.toLowerCase())) return false;
+    return new RegExp(`\\b${escapeRegExp(candidate)}\\b`, 'i').test(lower);
+  });
   if (!term || LOW_VALUE_SUBJECTS.has(term)) return '';
 
   const match = sentence.match(new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i'));
@@ -833,8 +950,41 @@ function contentTokens(value: string) {
   return normalizeKey(value).split(' ').filter((token) => token.length > 3 && !ignored.has(token));
 }
 
-function selectionScore(draft: ScoredDraft) {
-  return draft.qualityScore + CARD_TYPE_PRIORITY[draft.cardType];
+function selectionScore(draft: ScoredDraft, preferences?: DraftGenerationPreferences) {
+  return draft.qualityScore + CARD_TYPE_PRIORITY[draft.cardType] + adaptiveCardTypeBoost(draft.cardType, preferences);
+}
+
+export function adaptiveCardTypeBoost(
+  cardType: MedicalCardType,
+  preferences?: DraftGenerationPreferences,
+) {
+  if (!preferences) return 0;
+
+  let boost = 0;
+  const reasoningTypes: MedicalCardType[] = [
+    'diagnostic-reasoning',
+    'treatment-reasoning',
+    'contraindication',
+    'algorithm-step',
+    'comparison',
+  ];
+  const anchorTypes: MedicalCardType[] = ['definition', 'classification', 'cloze-recall'];
+
+  if (preferences.reviewStyle === 'clinical-reasoning' && reasoningTypes.includes(cardType)) boost += 0.11;
+  if (preferences.reviewStyle === 'visual-support' && ['comparison', 'classification', 'algorithm-step'].includes(cardType)) boost += 0.09;
+  if (preferences.reviewStyle === 'explanatory' && ['mechanism', 'diagnostic-reasoning', 'treatment-reasoning'].includes(cardType)) boost += 0.07;
+  if (preferences.reviewStyle === 'concise' && ['definition', 'clinical-finding', 'risk-factor'].includes(cardType)) boost += 0.05;
+  if (preferences.reviewStyle === 'test-first' && ['diagnostic-reasoning', 'comparison', 'clinical-finding'].includes(cardType)) boost += 0.09;
+
+  if (preferences.examGoal === 'board-style' && reasoningTypes.includes(cardType)) boost += 0.1;
+  if (preferences.examGoal === 'clinical-recall' && ['clinical-finding', 'diagnostic-reasoning', 'contraindication', 'treatment-reasoning'].includes(cardType)) boost += 0.09;
+  if (preferences.examGoal === 'class-quiz' && anchorTypes.includes(cardType)) boost += 0.07;
+  if (preferences.examGoal === 'source-mastery' && ['definition', 'classification', 'mechanism', 'cloze-recall'].includes(cardType)) boost += 0.06;
+
+  if (preferences.difficulty === 'gentle' && anchorTypes.includes(cardType)) boost += 0.06;
+  if (preferences.difficulty === 'challenging' && reasoningTypes.includes(cardType)) boost += 0.07;
+
+  return Math.round(boost * 100) / 100;
 }
 
 function recallAnswerKey(answer: string) {

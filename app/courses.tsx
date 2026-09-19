@@ -1,9 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
+import { File as ExpoFile, Paths } from 'expo-file-system';
 import { router, useFocusEffect } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AppButton } from '@/components/AppButton';
+import { AppShell } from '@/components/AppShell';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { LoadingState } from '@/components/ScreenState';
 import type { CourseModuleSummary, CourseSummary, Dashboard, DeckSummary } from '@/domain/types';
@@ -12,6 +15,7 @@ import {
   createCourse,
   createCourseModule,
   createDeck,
+  exportCollectionCards,
   getCourses,
   getDashboard,
   removeCourse,
@@ -33,6 +37,7 @@ export default function CoursesScreen() {
   const [deckDescription, setDeckDescription] = useState('');
   const [selectedExamDate, setSelectedExamDate] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showPortableTools, setShowPortableTools] = useState(false);
   const [confirmation, setConfirmation] = useState<{
     kind: 'class' | 'folder';
     id: string;
@@ -154,6 +159,44 @@ export default function CoursesScreen() {
     }
   }
 
+  async function exportCollection(scope: 'class' | 'folder', format: 'csv' | 'tsv') {
+    const courseId = scope === 'class' ? selectedClass?.id : undefined;
+    const moduleId = scope === 'folder' ? selectedFolder?.id : undefined;
+    if ((!courseId && !moduleId) || busy) return;
+    setBusy(true);
+    try {
+      const exported = await exportCollectionCards({ courseId, moduleId, format });
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const blob = new Blob([exported.content], { type: `${exported.mimeType};charset=utf-8` });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = exported.filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        Alert.alert('Export ready', `${exported.cardCount} cards were prepared from this ${scope}.`);
+      } else {
+        const file = new ExpoFile(Paths.cache, exported.filename);
+        if (!file.exists) file.create();
+        file.write(exported.content);
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(file.uri, {
+            mimeType: exported.mimeType,
+            dialogTitle: `Export ${scope}`,
+          });
+        } else {
+          Alert.alert('Export ready', `${exported.cardCount} cards were saved to ${file.uri}.`);
+        }
+      }
+    } catch (error) {
+      Alert.alert('Export did not finish', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function requestClassRemoval() {
     if (!selectedClass || busy) return;
     setConfirmation({
@@ -206,7 +249,7 @@ export default function CoursesScreen() {
   if (!classes || !dashboard) return <LoadingState label="Opening Classes & Folders" />;
 
   return (
-    <>
+    <AppShell active="library">
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <View style={styles.hero}>
         <View style={styles.heroIcon}><Ionicons name="school" size={23} color={colors.surface} /></View>
@@ -319,8 +362,8 @@ export default function CoursesScreen() {
             <AppButton
               disabled={!selectedFolder?.deckCount}
               icon="play"
-              label="Review folder"
-              onPress={() => selectedFolder && router.push({ pathname: '/study', params: { moduleId: selectedFolder.id } })}
+              label="Study folder"
+              onPress={() => selectedFolder && router.push({ pathname: '/modes', params: { moduleId: selectedFolder.id } })}
             />
             <AppButton
               disabled={!selectedFolder?.deckCount}
@@ -338,6 +381,30 @@ export default function CoursesScreen() {
             />
           </View>
         </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showPortableTools }}
+          onPress={() => setShowPortableTools((value) => !value)}
+          style={({ pressed }) => [styles.portableToggle, pressed && styles.pressed]}
+        >
+          <View style={styles.panelCopy}>
+            <Text style={styles.sectionTitle}>Offline copies & exports</Text>
+            <Text style={styles.body}>Optional Builder tools for moving a class or combined folder into another study app.</Text>
+          </View>
+          <Ionicons name={showPortableTools ? 'chevron-up' : 'chevron-down'} size={20} color={colors.blueDark} />
+        </Pressable>
+        {showPortableTools ? (
+          <View style={styles.portablePanel}>
+            <Text style={styles.body}>CSV and TSV contain card content only. Use Barion Backup when you need source evidence, scheduling, and review history.</Text>
+            <View style={styles.moduleActions}>
+              <AppButton disabled={!selectedClass?.cardCount || busy} icon="download-outline" label="Class CSV" variant="secondary" onPress={() => void exportCollection('class', 'csv')} />
+              <AppButton disabled={!selectedClass?.cardCount || busy} icon="download-outline" label="Class TSV" variant="secondary" onPress={() => void exportCollection('class', 'tsv')} />
+              <AppButton disabled={!selectedFolder?.cardCount || busy} icon="download-outline" label="Folder CSV" variant="secondary" onPress={() => void exportCollection('folder', 'csv')} />
+              <AppButton disabled={!selectedFolder?.cardCount || busy} icon="download-outline" label="Folder TSV" variant="secondary" onPress={() => void exportCollection('folder', 'tsv')} />
+            </View>
+          </View>
+        ) : null}
 
         <View style={styles.createDeckPanel}>
           <View style={styles.panelCopy}>
@@ -412,7 +479,7 @@ export default function CoursesScreen() {
       onCancel={() => setConfirmation(null)}
       onConfirm={() => void confirmRemoval()}
     />
-    </>
+    </AppShell>
   );
 }
 
@@ -532,6 +599,9 @@ const styles = StyleSheet.create({
   meta: { color: colors.muted, fontFamily: fonts.medium, fontSize: 11, lineHeight: 17 },
   moduleActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   panelCopy: { flex: 1, gap: 4, minWidth: 220 },
+  portablePanel: { backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, gap: 10, padding: 14 },
+  portableToggle: { alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, flexDirection: 'row', gap: 12, padding: 14 },
+  pressed: { opacity: 0.78 },
   sectionHeading: { alignItems: 'flex-start', flexDirection: 'row', gap: 12, justifyContent: 'space-between' },
   sectionTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 18, lineHeight: 24 },
   title: { color: colors.surface, fontFamily: fonts.extraBold, fontSize: 23, lineHeight: 29 },
