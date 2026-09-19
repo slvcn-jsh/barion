@@ -58,6 +58,8 @@
     "eas:login": "npx eas-cli@latest login",
     "eas:link": "npx eas-cli@latest init",
     "web": "node scripts/start-web.js",
+    "gateway": "python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790",
+    "test:gateway": "python -m pytest services/ai_gateway/tests -q",
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",

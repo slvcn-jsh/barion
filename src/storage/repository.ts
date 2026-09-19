@@ -2,6 +2,11 @@ import * as DocumentPicker from 'expo-document-picker';
 import type * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 
+import { readExpoPublicGatewayConfig } from '@/ai/config';
+import { asBarionAIError } from '@/ai/errors';
+import { createGatewayCardGenerationProvider } from '@/ai/gatewayProvider';
+import { generateGroundedCardsWithFallback } from '@/ai/generate';
+import type { GroundedCardCandidate } from '@/ai/types';
 import { createId, nowIso } from '@/domain/ids';
 import {
   buildImportedCardsForRow,
@@ -1081,6 +1086,15 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       id,
       status,
       summary,
+      provider_id AS providerId,
+      model_id AS modelId,
+      prompt_id AS promptId,
+      prompt_version AS promptVersion,
+      request_id AS requestId,
+      provider_request_id AS providerRequestId,
+      input_tokens AS inputTokens,
+      output_tokens AS outputTokens,
+      fallback_reason AS fallbackReason,
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM generation_jobs
@@ -1715,11 +1729,40 @@ export async function generateDraftsForSource(sourceId: string) {
 
   const profile = await getStudyProfile();
   const studyGuide = createStudyGuide(rows, source.title);
-  const drafts = createExtractiveDrafts(rows, {
-    reviewStyle: profile.reviewStyle,
-    difficulty: profile.difficulty,
-    examGoal: profile.examGoal,
-  });
+  const requestId = createId('generation-request');
+  let gatewayConfigError: string | undefined;
+  let provider = null;
+  try {
+    const config = readExpoPublicGatewayConfig();
+    provider = config ? createGatewayCardGenerationProvider(config) : null;
+  } catch (error) {
+    gatewayConfigError = asBarionAIError(error).code;
+  }
+
+  const generation = await generateGroundedCardsWithFallback(
+    provider,
+    {
+      requestId,
+      sourceId,
+      sourceTitle: source.title,
+      maxCandidates: 56,
+      segments: rows.map((row) => ({
+        segmentId: row.id,
+        locator: row.locator,
+        sectionPath: row.sectionPath,
+        text: row.text,
+      })),
+    },
+    () => createExtractiveDrafts(rows, {
+      reviewStyle: profile.reviewStyle,
+      difficulty: profile.difficulty,
+      examGoal: profile.examGoal,
+    }),
+    undefined,
+    gatewayConfigError,
+  );
+  const drafts = generation.candidates;
+  const localGeneration = generation.provenance.providerId === 'local-extractive';
   const now = nowIso();
   const jobId = createId('job');
   const candidateIds: string[] = [];
@@ -1730,8 +1773,9 @@ export async function generateDraftsForSource(sourceId: string) {
     await upsertSourceStudyGuide(txn, sourceId, studyGuide, now);
     await txn.runAsync(
       `INSERT INTO generation_jobs
-       (id, source_id, deck_id, status, summary, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, source_id, deck_id, status, summary, provider_id, model_id, prompt_id, prompt_version,
+        request_id, provider_request_id, input_tokens, output_tokens, fallback_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       jobId,
       sourceId,
       source.defaultDeckId,
@@ -1739,13 +1783,26 @@ export async function generateDraftsForSource(sourceId: string) {
       drafts.length
         ? `Checking ${drafts.length} source-grounded drafts against Barion's quality gate.`
         : 'The source was extracted, but it did not contain enough readable prose for study cards.',
+      generation.provenance.providerId,
+      generation.provenance.modelId,
+      generation.provenance.promptId,
+      generation.provenance.promptVersion,
+      generation.provenance.requestId,
+      generation.provenance.providerRequestId ?? null,
+      generation.provenance.usage?.inputTokens ?? null,
+      generation.provenance.usage?.outputTokens ?? null,
+      generation.provenance.fallbackReason ?? null,
       now,
       now,
     );
 
     for (const draft of drafts) {
       const candidateId = createId('candidate');
-      if (draft.qualityScore >= AUTO_PUBLISH_QUALITY_SCORE) {
+      const qualityScore = localGeneration ? draftQuality(draft) : 0.76;
+      const qualityNotes = localGeneration
+        ? draftQualityNotes(draft)
+        : 'Gateway-generated and source-grounded; requires user review before publishing.';
+      if (localGeneration && qualityScore >= AUTO_PUBLISH_QUALITY_SCORE) {
         candidateIds.push(candidateId);
       }
       await txn.runAsync(
@@ -1757,13 +1814,13 @@ export async function generateDraftsForSource(sourceId: string) {
         draft.segmentId,
         draft.cardType,
         draft.learningObjective,
-        draft.qualityScore,
-        draft.qualityNotes,
+        qualityScore,
+        qualityNotes,
         draft.question,
         draft.answer,
         draft.evidenceText,
         draft.locator,
-        'extractive-source-match',
+        localGeneration ? 'extractive-source-match' : 'gateway-source-match',
         1,
         'pending',
         now,
@@ -1803,6 +1860,18 @@ export async function generateDraftsForSource(sourceId: string) {
   }
 
   return drafts.length;
+}
+
+function draftQuality(draft: GroundedCardCandidate) {
+  return 'qualityScore' in draft && typeof draft.qualityScore === 'number'
+    ? draft.qualityScore
+    : 0.76;
+}
+
+function draftQualityNotes(draft: GroundedCardCandidate) {
+  return 'qualityNotes' in draft && typeof draft.qualityNotes === 'string'
+    ? draft.qualityNotes
+    : 'Source-grounded draft requires user review before publishing.';
 }
 
 export async function approveCandidate(candidateId: string, deckId?: string, automated = false) {

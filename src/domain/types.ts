@@ -309,6 +309,15 @@ export type GenerationJobSummary = {
   id: string;
   status: string;
   summary: string;
+  providerId: string;
+  modelId: string;
+  promptId: string;
+  promptVersion: string;
+  requestId?: string | null;
+  providerRequestId?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  fallbackReason?: string | null;
   createdAt: string;
   updatedAt?: string | null;
 };

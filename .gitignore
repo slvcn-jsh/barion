@@ -36,8 +36,10 @@ app/reference/*.zip
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# local env files (Expo EXPO_PUBLIC_* values are client-visible, never secrets)
+.env
+.env.*
+!.env.example
 .env.eas-simulator
 
 # typescript

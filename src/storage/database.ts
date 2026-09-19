@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { seedDatabaseIfNeeded } from '@/storage/seed';
 
-export const DATABASE_VERSION = 16;
+export const DATABASE_VERSION = 17;
 
 let database: SQLite.SQLiteDatabase | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -171,6 +171,15 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL,
       status TEXT NOT NULL,
       summary TEXT NOT NULL,
+      provider_id TEXT NOT NULL DEFAULT 'local-extractive',
+      model_id TEXT NOT NULL DEFAULT 'barion-extractive-rules',
+      prompt_id TEXT NOT NULL DEFAULT 'extractive-rules',
+      prompt_version TEXT NOT NULL DEFAULT 'extractive-v1',
+      request_id TEXT,
+      provider_request_id TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      fallback_reason TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -560,6 +569,35 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'REAL NOT NULL DEFAULT 0',
     ),
     generatedCandidateSegmentId: await addColumnIfMissing(db, 'generated_candidates', 'segment_id', 'TEXT'),
+    generationJobProviderId: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'provider_id',
+      "TEXT NOT NULL DEFAULT 'local-extractive'",
+    ),
+    generationJobModelId: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'model_id',
+      "TEXT NOT NULL DEFAULT 'barion-extractive-rules'",
+    ),
+    generationJobPromptId: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'prompt_id',
+      "TEXT NOT NULL DEFAULT 'extractive-rules'",
+    ),
+    generationJobPromptVersion: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'prompt_version',
+      "TEXT NOT NULL DEFAULT 'extractive-v1'",
+    ),
+    generationJobRequestId: await addColumnIfMissing(db, 'generation_jobs', 'request_id', 'TEXT'),
+    generationJobProviderRequestId: await addColumnIfMissing(db, 'generation_jobs', 'provider_request_id', 'TEXT'),
+    generationJobInputTokens: await addColumnIfMissing(db, 'generation_jobs', 'input_tokens', 'INTEGER'),
+    generationJobOutputTokens: await addColumnIfMissing(db, 'generation_jobs', 'output_tokens', 'INTEGER'),
+    generationJobFallbackReason: await addColumnIfMissing(db, 'generation_jobs', 'fallback_reason', 'TEXT'),
     generationJobUpdatedAt: await addColumnIfMissing(db, 'generation_jobs', 'updated_at', 'TEXT'),
     memoryInitialFsrsCardJson: await addColumnIfMissing(db, 'memory_states', 'initial_fsrs_card_json', 'TEXT'),
     noteDeletedAt: await addColumnIfMissing(db, 'notes', 'deleted_at', 'TEXT'),
@@ -1021,6 +1059,7 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_decks_visibility ON decks(deleted_at, archived_at, updated_at);
     CREATE INDEX IF NOT EXISTS idx_decks_copy_lineage ON decks(copied_from_deck_id);
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_source_id ON generation_jobs(source_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_generation_jobs_request_id ON generation_jobs(request_id);
     CREATE INDEX IF NOT EXISTS idx_card_learning_weak ON card_learning_state(is_suspended, weak_score DESC);
     CREATE INDEX IF NOT EXISTS idx_card_learning_buried ON card_learning_state(buried_until, is_suspended);
     CREATE INDEX IF NOT EXISTS idx_card_learning_leech ON card_learning_state(is_leech, lapse_count DESC);
