@@ -47,6 +47,13 @@ export function createGatewayCardGenerationProvider(
         };
       } catch (error) {
         if (error instanceof BarionAIError) throw error;
+        if (abortController.signal.aborted) {
+          throw new BarionAIError('timeout_error', 'AI gateway request timed out.', {
+            recoverable: true,
+            providerId: 'barion-gateway',
+            modelId: config.model,
+          });
+        }
         throw new BarionAIError('network_error', 'Unable to reach AI gateway.', {
           recoverable: true,
           providerId: 'barion-gateway',
@@ -73,8 +80,18 @@ function httpError(status: number, modelId: string) {
       providerId: 'barion-gateway', modelId, httpStatus: status,
     });
   }
+  if (status === 413) {
+    return new BarionAIError('request_too_large', 'AI gateway request is too large.', {
+      providerId: 'barion-gateway', modelId, httpStatus: status,
+    });
+  }
   if (status === 429) {
     return new BarionAIError('rate_limited', 'AI gateway is busy. Try again later.', {
+      recoverable: true, providerId: 'barion-gateway', modelId, httpStatus: status,
+    });
+  }
+  if (status === 504) {
+    return new BarionAIError('timeout_error', 'AI generation timed out.', {
       recoverable: true, providerId: 'barion-gateway', modelId, httpStatus: status,
     });
   }

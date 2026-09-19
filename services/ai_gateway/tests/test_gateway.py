@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
@@ -9,8 +10,9 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("BARION_AI_GATEWAY_AUTH_TOKEN", "module-test-token")
 
 from services.ai_gateway.config import GatewaySettings
+from services.ai_gateway.errors import GatewayError
 from services.ai_gateway.main import create_app
-from services.ai_gateway.models import GeneratedCard, GeneratedCardOutput, ProviderUsage
+from services.ai_gateway.models import CardGenerationRequest, GeneratedCard, GeneratedCardOutput, ProviderUsage
 from services.ai_gateway.orchestration import GenerationOrchestrator
 from services.ai_gateway.providers.base import ProviderResult
 from services.ai_gateway.providers.gemini import GeminiGenerationProvider
@@ -43,6 +45,17 @@ class FakeProvider:
             ]),
             usage=ProviderUsage(inputTokens=21, outputTokens=12),
         )
+
+
+class FailingProvider:
+    id = "fake"
+    model = "test-model"
+
+    def __init__(self, error):
+        self.error = error
+
+    async def generate_cards(self, _request):
+        raise self.error
 
 
 def settings(**changes):
@@ -160,6 +173,36 @@ def test_rate_limit_returns_normalized_error():
     assert response.json()["error"]["code"] == "rate_limited"
 
 
+def test_provider_failure_returns_normalized_recoverable_error():
+    error = GatewayError("provider_unavailable", "Generation provider is unavailable.", 503, True, "fake")
+    client = TestClient(create_app(settings(), GenerationOrchestrator(FailingProvider(error))))
+
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=request_body(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "provider_unavailable"
+    assert response.json()["error"]["recoverable"] is True
+
+
+def test_provider_timeout_returns_normalized_recoverable_error():
+    error = GatewayError("provider_timeout", "Generation provider timed out.", 504, True, "fake")
+    client = TestClient(create_app(settings(), GenerationOrchestrator(FailingProvider(error))))
+
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=request_body(),
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "provider_timeout"
+    assert response.json()["error"]["recoverable"] is True
+
+
 def test_bari_chat_foundation_returns_insufficient_evidence():
     client = TestClient(create_app(settings(), GenerationOrchestrator(FakeProvider())))
     response = client.post(
@@ -169,6 +212,61 @@ def test_bari_chat_foundation_returns_insufficient_evidence():
     )
     assert response.status_code == 200
     assert "enough support" in response.json()["message"]
+
+
+def test_gemini_adapter_normalizes_timeout():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            try:
+                await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+                raise AssertionError("Expected provider timeout")
+            except GatewayError as error:
+                assert error.code == "provider_timeout"
+                assert error.status_code == 504
+                assert error.recoverable is True
+
+    asyncio.run(run())
+
+
+def test_gemini_adapter_normalizes_http_failures():
+    async def run(status: int, expected_code: str, expected_status: int, recoverable: bool):
+        async def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(status)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            try:
+                await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+                raise AssertionError("Expected provider failure")
+            except GatewayError as error:
+                assert error.code == expected_code
+                assert error.status_code == expected_status
+                assert error.recoverable is recoverable
+
+    asyncio.run(run(429, "provider_rate_limited", 429, True))
+    asyncio.run(run(503, "provider_unavailable", 503, True))
+
+
+def test_gemini_adapter_rejects_malformed_structured_output():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "not-json"}]}}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            try:
+                await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+                raise AssertionError("Expected invalid provider response")
+            except GatewayError as error:
+                assert error.code == "invalid_provider_response"
+                assert error.status_code == 502
+                assert error.recoverable is True
+
+    asyncio.run(run())
 
 
 def test_gemini_adapter_uses_server_key_and_structured_schema():
@@ -191,10 +289,8 @@ def test_gemini_adapter_uses_server_key_and_structured_schema():
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
             provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
-            from services.ai_gateway.models import CardGenerationRequest
             result = await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
             assert result.request_id == "gemini-request-1"
             assert result.usage == ProviderUsage(inputTokens=9, outputTokens=2)
 
-    import asyncio
     asyncio.run(run())

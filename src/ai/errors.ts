@@ -1,8 +1,10 @@
 export type AIErrorCode =
   | 'configuration_error'
   | 'network_error'
+  | 'timeout_error'
   | 'authentication_error'
   | 'rate_limited'
+  | 'request_too_large'
   | 'model_unavailable'
   | 'invalid_provider_response'
   | 'insufficient_evidence'

@@ -69,8 +69,10 @@ describe('createGatewayCardGenerationProvider', () => {
 
   it.each([
     [401, 'authentication_error'],
+    [413, 'request_too_large'],
     [429, 'rate_limited'],
     [503, 'model_unavailable'],
+    [504, 'timeout_error'],
   ])('maps HTTP %s to %s', async (status, code) => {
     const fetchImplementation = jest.fn(async () => ({ ok: false, status })) as unknown as typeof fetch;
     const promise = createGatewayCardGenerationProvider(config, fetchImplementation).generate(request);
@@ -87,7 +89,7 @@ describe('createGatewayCardGenerationProvider', () => {
       .rejects.toEqual(expect.objectContaining({ code: 'invalid_provider_response' }));
   });
 
-  it('aborts timed-out requests and returns recoverable network error', async () => {
+  it('aborts timed-out requests and returns recoverable timeout error', async () => {
     jest.useFakeTimers();
     try {
       const fetchImplementation = jest.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
@@ -98,7 +100,7 @@ describe('createGatewayCardGenerationProvider', () => {
       jest.advanceTimersByTime(1_000);
 
       await expect(promise).rejects.toEqual(expect.objectContaining({
-        code: 'network_error',
+        code: 'timeout_error',
         recoverable: true,
       } satisfies Partial<BarionAIError>));
     } finally {

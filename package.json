@@ -64,6 +64,7 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:e2e": "playwright test",
+    "test:e2e:ai-fallback": "playwright test --config=playwright.ai-fallback.config.js",
     "check": "npm run typecheck && npm test"
   },
   "private": true
