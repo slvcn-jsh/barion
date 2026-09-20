@@ -6,7 +6,10 @@ Server-only boundary for model credentials and source-grounded AI operations. Cu
 
 Copy values into a local `.env` or set them in deployment secret management. Never prefix server secrets with `EXPO_PUBLIC_`.
 
+Local development:
+
 ```powershell
+$env:BARION_AI_AUTH_MODE='static'
 $env:BARION_AI_GATEWAY_AUTH_TOKEN='replace-with-long-random-token'
 $env:GEMINI_API_KEY='replace-with-provider-key'
 $env:PRIMARY_GENERATION_PROVIDER='gemini'
@@ -14,6 +17,17 @@ $env:PRIMARY_GENERATION_MODEL='gemini-2.5-flash'
 $env:BARION_AI_ALLOWED_ORIGINS='http://localhost:8081,http://127.0.0.1:8081'
 python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790
 ```
+
+Production authentication:
+
+```powershell
+$env:BARION_AI_AUTH_MODE='supabase'
+$env:SUPABASE_URL='https://project-ref.supabase.co'
+$env:BARION_AI_JWT_AUDIENCE='authenticated'
+$env:BARION_AI_MAX_ACCESS_TOKEN_LIFETIME_SECONDS='3600'
+```
+
+Supabase mode verifies asymmetric access tokens through project JWKS and limits requests by verified user `sub`. Details: [`docs/architecture/ai-gateway-authentication.md`](../../docs/architecture/ai-gateway-authentication.md).
 
 Client development values:
 
@@ -24,14 +38,14 @@ $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN='same-development-token'
 npm run web
 ```
 
-`EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN` is only acceptable as a local/shared-client gateway credential. Expo embeds it in compiled bundles, so it is not a secret and must never be a provider API key. Public deployment requires user authentication issuing short-lived access tokens; static client tokens are not production authorization.
+`EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN` is only acceptable in local static-auth mode. Expo embeds it in compiled bundles, so it is not a secret and must never be a provider API key. Production clients send short-lived Supabase session access tokens obtained at request time; omit static token from production builds.
 
 Physical devices must use gateway machine's LAN address. Production gateway URL must use HTTPS.
 
 ## API
 
 - `GET /v1/health`: dependency status without credentials.
-- `POST /v1/card-generation`: authenticated structured generation; gateway revalidates segment IDs, verbatim evidence, limits, and duplicates.
+- `POST /v1/card-generation`: authenticated structured generation; gateway revalidates segment IDs, verbatim evidence, quantity contract, limits, and duplicates.
 - `POST /v1/bari/chat`: authenticated source-strict foundation. AI chat generation intentionally deferred to Bari sprint.
 
 All retrieved document content remains reference data. Prompt instructions from source material must not be executed. Logs include metadata only, never prompts or source text.

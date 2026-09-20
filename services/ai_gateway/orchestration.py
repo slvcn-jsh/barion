@@ -2,21 +2,38 @@ from __future__ import annotations
 
 from time import monotonic
 
-from .models import CardGenerationRequest, CardGenerationResponse
+from .errors import GatewayError
+from .models import BariChatRequest, BariChatResponse, BariGeneration, CardGenerationRequest, CardGenerationResponse
 from .providers.base import GenerationProvider
+from .retrieval import NoOpRetriever, SourceRetriever
 from .telemetry import TelemetryEvent, record
 from .validation import validate_grounded_output
 
 
 class GenerationOrchestrator:
-    def __init__(self, provider: GenerationProvider) -> None:
+    def __init__(
+        self,
+        provider: GenerationProvider,
+        retriever: SourceRetriever | None = None,
+    ) -> None:
         self.provider = provider
+        self.retriever = retriever or NoOpRetriever()
+        self._conversations: dict[str, list[dict[str, str]]] = {}
 
     async def generate_cards(self, request: CardGenerationRequest) -> CardGenerationResponse:
         started = monotonic()
         try:
             result = await self.provider.generate_cards(request)
             output = validate_grounded_output(request, result.output)
+            if len(output.candidates) < request.minCandidates:
+                raise GatewayError(
+                    "insufficient_candidates",
+                    "Generation provider returned fewer supported cards than required.",
+                    502,
+                    True,
+                    self.provider.id,
+                    {"validatedCandidateCount": len(output.candidates), "minCandidates": request.minCandidates},
+                )
             record(TelemetryEvent(
                 requestId=request.requestId,
                 operation="card-generation",
@@ -39,6 +56,87 @@ class GenerationOrchestrator:
             record(TelemetryEvent(
                 requestId=request.requestId,
                 operation="card-generation",
+                provider=self.provider.id,
+                model=self.provider.model,
+                latencyMs=round((monotonic() - started) * 1_000),
+                success=False,
+                errorCategory=getattr(error, "code", "internal_error"),
+            ))
+            raise
+
+    async def bari_chat(self, request: BariChatRequest) -> BariChatResponse:
+        started = monotonic()
+
+        # Get or initialize conversation history
+        conversation_id = request.conversationId or ""
+        history = self._conversations.get(conversation_id, [])
+
+        # Limit history to last 10 exchanges (20 messages) to manage context window
+        if len(history) > 20:
+            history = history[-20:]
+
+        # Auto-retrieve evidence if not provided and retrieval is enabled
+        evidence = request.evidence
+        if not evidence:
+            evidence = await self.retriever.retrieve_evidence(request, max_segments=5)
+
+        # Create enriched request with retrieved evidence
+        enriched_request = BariChatRequest(
+            conversationId=request.conversationId,
+            message=request.message,
+            mode=request.mode,
+            sourceScope=request.sourceScope,
+            courseId=request.courseId,
+            deckId=request.deckId,
+            documentIds=request.documentIds,
+            evidence=evidence,
+        )
+
+        try:
+            result = await self.provider.bari_chat(enriched_request, history)
+
+            # Update conversation history
+            if conversation_id:
+                history.append({"role": "user", "content": request.message})
+                history.append({"role": "model", "content": result.message})
+                self._conversations[conversation_id] = history
+
+            # Extract citations from response if evidence was provided
+            citations = []
+            if evidence:
+                for idx, segment in enumerate(evidence, 1):
+                    if segment.locator.lower() in result.message.lower():
+                        citations.append({
+                            "segmentId": segment.segmentId,
+                            "locator": segment.locator,
+                            "sectionPath": segment.sectionPath,
+                        })
+
+            record(TelemetryEvent(
+                requestId=result.request_id,
+                operation="bari-chat",
+                provider=self.provider.id,
+                model=self.provider.model,
+                latencyMs=round((monotonic() - started) * 1_000),
+                success=True,
+                inputTokens=result.usage.inputTokens if result.usage else None,
+                outputTokens=result.usage.outputTokens if result.usage else None,
+            ))
+
+            return BariChatResponse(
+                message=result.message,
+                citations=citations,
+                evidence=evidence,
+                generation=BariGeneration(
+                    provider=self.provider.id,
+                    model=self.provider.model,
+                    requestId=result.request_id,
+                ),
+            )
+        except Exception as error:
+            record(TelemetryEvent(
+                requestId=conversation_id or "unknown",
+                operation="bari-chat",
                 provider=self.provider.id,
                 model=self.provider.model,
                 latencyMs=round((monotonic() - started) * 1_000),
