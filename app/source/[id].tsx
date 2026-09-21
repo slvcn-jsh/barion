@@ -419,6 +419,7 @@ export default function SourceDetailScreen() {
           {pendingCandidates.map((candidate, index) => {
             const editing = editingId === candidate.id;
             const acting = actionId === candidate.id;
+            const evaluation = parseCandidateEvaluation(candidate.evaluationJson);
             return (
               <View key={candidate.id} style={styles.candidateCard}>
                 <View style={styles.candidateTopline}>
@@ -476,7 +477,20 @@ export default function SourceDetailScreen() {
                     <Text style={styles.evidenceLabel}>ORIGINAL EVIDENCE · {candidate.locator}</Text>
                   </View>
                   <Text style={styles.evidenceText}>{candidate.evidenceText}</Text>
+                  {candidate.evidenceSpanJson ? (
+                    <Text style={styles.spanMeta}>{formatSpanProvenance(candidate.evidenceSpanJson)}</Text>
+                  ) : (
+                    <Text style={styles.spanWarning}>Legacy evidence link · exact span unavailable</Text>
+                  )}
                 </View>
+
+                {evaluation ? (
+                  <View style={styles.holdPanel}>
+                    <Text style={styles.holdTitle}>{evaluation.publicationDisposition} · {explainDisposition(evaluation)}</Text>
+                    <Text style={styles.holdDetail}>Grounding: {evaluation.sourceClaimSupported} · Citation: {evaluation.citationStatus}</Text>
+                    <Text style={styles.holdDetail}>Medical verification: {evaluation.medicalVerificationStatus}</Text>
+                  </View>
+                ) : null}
 
                 <View style={styles.candidateActions}>
                   {editing ? (
@@ -673,6 +687,41 @@ function formatBytes(bytes?: number | null) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+type CandidateEvaluationView = {
+  publicationDisposition: string;
+  reasonCodes: string[];
+  sourceClaimSupported: string;
+  citationStatus: string;
+  medicalVerificationStatus: string;
+};
+
+function parseCandidateEvaluation(value?: string | null): CandidateEvaluationView | null {
+  if (!value) return null;
+  try { return JSON.parse(value) as CandidateEvaluationView; } catch { return null; }
+}
+
+function explainDisposition(evaluation: CandidateEvaluationView) {
+  const code = evaluation.reasonCodes[0];
+  if (code === 'SOURCE_CONFLICT') return 'Source claim conflicts with current authoritative evidence.';
+  if (code === 'HIGH_RISK_UNVERIFIED') return 'High-risk claim awaits authoritative verification.';
+  if (code === 'EVIDENCE_SPAN_UNRESOLVED') return 'Cited text could not be uniquely located.';
+  if (code === 'UNSUPPORTED_OPTIONAL') return 'Optional explanation contains unsupported material.';
+  if (evaluation.publicationDisposition === 'REJECT') return 'Candidate failed source or safety requirements.';
+  return 'Claim support has not been fully evaluated; card remains held.';
+}
+
+function formatSpanProvenance(value: string) {
+  try {
+    const span = JSON.parse(value) as { status?: string; startOffset?: number | null; endOffset?: number | null };
+    if (span.startOffset === null || span.startOffset === undefined || span.endOffset === null || span.endOffset === undefined) {
+      return `Span ${span.status ?? 'unresolved'} · source review required`;
+    }
+    return `Span ${span.status ?? 'resolved'} · UTF-16 [${span.startOffset}, ${span.endOffset})`;
+  } catch {
+    return 'Invalid span metadata · source review required';
+  }
+}
+
 const styles = StyleSheet.create({
   answerInput: { minHeight: 104 },
   badgeRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' },
@@ -714,6 +763,8 @@ const styles = StyleSheet.create({
   evidenceLabel: { color: colors.tealDark, flex: 1, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.55 },
   evidencePanel: { backgroundColor: colors.surfaceTeal, borderRadius: radii.md, gap: 8, padding: 14 },
   evidenceText: { color: colors.inkSoft, fontFamily: fonts.regular, fontSize: 12, lineHeight: 19 },
+  spanMeta: { color: colors.tealDark, fontFamily: fonts.semibold, fontSize: 10 },
+  spanWarning: { color: colors.coral, fontFamily: fonts.semibold, fontSize: 10 },
   evidenceTopline: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   eyebrow: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 1.25 },
   expandGuide: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 5, minHeight: 38, paddingRight: 8 },
@@ -729,6 +780,9 @@ const styles = StyleSheet.create({
   filename: { color: colors.inkSoft, fontFamily: fonts.medium, fontSize: 12 },
   groundedBadge: { alignItems: 'center', backgroundColor: colors.surfaceTeal, borderRadius: radii.pill, flexDirection: 'row', gap: 5, paddingHorizontal: 9, paddingVertical: 6 },
   groundedText: { color: colors.tealDark, fontFamily: fonts.bold, fontSize: 10 },
+  holdDetail: { color: colors.inkSoft, fontFamily: fonts.medium, fontSize: 11, lineHeight: 17 },
+  holdPanel: { backgroundColor: colors.surfaceMuted, borderColor: colors.lineStrong, borderRadius: radii.sm, borderWidth: 1, gap: 4, padding: 11 },
+  holdTitle: { color: colors.coral, fontFamily: fonts.bold, fontSize: 12, lineHeight: 18 },
   guideActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   guideBlock: { gap: 11 },
   guideBlockHeading: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },

@@ -95,6 +95,9 @@ def settings(**changes):
         "generation_model": "test-model",
         "gemini_api_key": "provider-secret",
         "provider_timeout_seconds": 30,
+        "provider_max_attempts": 4,
+        "provider_retry_base_delay_seconds": 1,
+        "provider_retry_max_delay_seconds": 16,
         "max_request_bytes": 300_000,
         "max_input_characters": 180_000,
     }
@@ -512,7 +515,10 @@ def test_gemini_adapter_normalizes_timeout():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=1,
+            )
             try:
                 await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
                 raise AssertionError("Expected provider timeout")
@@ -521,6 +527,9 @@ def test_gemini_adapter_normalizes_timeout():
                 assert error.status_code == 504
                 assert error.recoverable is True
                 assert error.diagnostics["attempt"] == 1
+                assert error.diagnostics["maxAttempts"] == 1
+                assert error.diagnostics["retryCount"] == 0
+                assert error.diagnostics["retriesExhausted"] is True
                 assert error.diagnostics["timeoutPhase"] == "read"
                 assert error.diagnostics["transportError"] == "ReadTimeout"
                 assert error.diagnostics["elapsedMs"] >= 0
@@ -534,7 +543,10 @@ def test_gemini_adapter_normalizes_http_failures():
             return httpx.Response(status)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=1,
+            )
             try:
                 await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
                 raise AssertionError("Expected provider failure")
@@ -545,6 +557,124 @@ def test_gemini_adapter_normalizes_http_failures():
 
     asyncio.run(run(429, "provider_rate_limited", 429, True))
     asyncio.run(run(503, "provider_unavailable", 503, True))
+
+
+def test_gemini_adapter_retries_503_until_success_with_exponential_jitter():
+    attempts = 0
+    delays = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return httpx.Response(503, headers={"x-goog-request-id": f"retry-{attempts}"})
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "success-request"},
+            json={"candidates": [{"content": {"parts": [{"text": json.dumps({"candidates": []})}]}}]},
+        )
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=4,
+                retry_base_delay_seconds=2,
+                retry_max_delay_seconds=20,
+                sleep=sleep,
+                random_value=lambda: 0.5,
+            )
+            result = await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+            assert result.request_id == "success-request"
+
+    asyncio.run(run())
+    assert attempts == 3
+    assert delays == [1, 2]
+
+
+def test_gemini_adapter_honors_retry_after_and_reports_final_attempt():
+    attempts = 0
+    delays = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            503,
+            headers={"Retry-After": "7", "x-goog-request-id": f"request-{attempts}"},
+            json={"error": {"code": 503, "status": "UNAVAILABLE", "message": "High demand"}},
+        )
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=3,
+                retry_base_delay_seconds=1,
+                retry_max_delay_seconds=10,
+                sleep=sleep,
+            )
+            try:
+                await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+                raise AssertionError("Expected provider failure")
+            except GatewayError as error:
+                diagnostics = error.diagnostics
+                assert error.code == "provider_unavailable"
+                assert diagnostics["attempt"] == 3
+                assert diagnostics["maxAttempts"] == 3
+                assert diagnostics["retryCount"] == 2
+                assert diagnostics["retriesExhausted"] is True
+                assert diagnostics["providerRequestId"] == "request-3"
+                assert diagnostics["retryHistory"] == [
+                    {"attempt": 1, "providerStatus": 503, "delayMs": 7000,
+                     "providerRequestId": "request-1"},
+                    {"attempt": 2, "providerStatus": 503, "delayMs": 7000,
+                     "providerRequestId": "request-2"},
+                ]
+
+    asyncio.run(run())
+    assert attempts == 3
+    assert delays == [7, 7]
+
+
+def test_gemini_adapter_does_not_retry_non_retryable_response():
+    attempts = 0
+    delays = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(400)
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=4,
+                sleep=sleep,
+            )
+            try:
+                await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
+                raise AssertionError("Expected provider failure")
+            except GatewayError as error:
+                assert error.code == "provider_rejected_request"
+                assert error.recoverable is False
+                assert error.diagnostics["attempt"] == 1
+                assert error.diagnostics["retryCount"] == 0
+                assert error.diagnostics["retriesExhausted"] is False
+
+    asyncio.run(run())
+    assert attempts == 1
+    assert delays == []
 
 
 def test_gemini_adapter_exposes_sanitized_provider_diagnostics():
@@ -585,7 +715,10 @@ def test_gemini_adapter_exposes_sanitized_provider_diagnostics():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
-            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            provider = GeminiGenerationProvider(
+                "provider-secret", "test-model", 30, http_client,
+                max_attempts=1,
+            )
             try:
                 await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
                 raise AssertionError("Expected provider failure")
@@ -659,9 +792,11 @@ def test_gemini_adapter_uses_server_key_and_structured_schema():
         assert body["systemInstruction"]["parts"][0]["text"] != request_body()["systemPrompt"]
         assert "untrusted reference material" in body["systemInstruction"]["parts"][0]["text"]
         assert body["generationConfig"]["responseMimeType"] == "application/json"
+        assert body["generationConfig"]["maxOutputTokens"] == 32_768
+        assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
         candidates_schema = body["generationConfig"]["responseJsonSchema"]["properties"]["candidates"]
-        assert candidates_schema["minItems"] == 1
-        assert candidates_schema["maxItems"] == 3
+        assert "minItems" not in candidates_schema
+        assert "maxItems" not in candidates_schema
         return httpx.Response(
             200,
             headers={"x-request-id": "gemini-request-1"},
@@ -679,3 +814,19 @@ def test_gemini_adapter_uses_server_key_and_structured_schema():
             assert result.usage == ProviderUsage(inputTokens=9, outputTokens=2)
 
     asyncio.run(run())
+
+
+def test_gateway_derives_span_and_ignores_legacy_missing_offsets():
+    client = TestClient(create_app(settings(), GenerationOrchestrator(FakeProvider())))
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=request_body(),
+    )
+    span = response.json()["output"]["candidates"][0]["evidenceSpan"]
+    assert span["status"] == "exact"
+    assert span["offsetEncoding"] == "utf16-code-units"
+    assert span["boundaryConvention"] == "half-open"
+    assert span["startOffset"] == 0
+    assert span["endOffset"] == len("Metformin reduces hepatic glucose production.")
+    assert len(span["evidenceTextSha256"]) == len(span["sourceTextSha256"]) == 64

@@ -1,5 +1,7 @@
+import { localExtractiveEvaluation } from '@/ai/evaluation';
 import { asBarionAIError, BarionAIError } from '@/ai/errors';
 import { buildGroundedCardRequest } from '@/ai/prompts';
+import { resolveSourceSpan } from '@/ai/sourceSpan';
 import type {
   AITelemetryEvent,
   AITelemetrySink,
@@ -26,11 +28,11 @@ export async function generateGroundedCardsWithFallback(
     try {
       return await generateGroundedCards(provider, input, telemetry);
     } catch (error) {
-      return localResult(input.requestId, createLocalCandidates(), asBarionAIError(error).code);
+      return localResult(input.requestId, await resolveLocalCandidates(createLocalCandidates(), input), asBarionAIError(error).code);
     }
   }
 
-  return localResult(input.requestId, createLocalCandidates(), initialFallbackReason);
+  return localResult(input.requestId, await resolveLocalCandidates(createLocalCandidates(), input), initialFallbackReason);
 }
 
 export async function generateGroundedCards(
@@ -44,7 +46,7 @@ export async function generateGroundedCards(
 
   try {
     const response = await provider.generate(request);
-    const candidates = parseGroundedCardResponse(response.output, input.segments, input.maxCandidates);
+    const candidates = await parseGroundedCardResponse(response.output, input.segments, input.maxCandidates);
     recordSafely(telemetry, {
       requestId: input.requestId,
       operation: 'card-generation',
@@ -105,6 +107,21 @@ function localResult(
     },
   };
 }
+
+async function resolveLocalCandidates(
+  candidates: GroundedCardGenerationResult['candidates'],
+  input: CardGenerationInput,
+) {
+  const byId = new Map(input.segments.map((segment) => [segment.segmentId, segment]));
+  return Promise.all(candidates.map(async (candidate) => {
+    const segment = byId.get(candidate.segmentId);
+    if (!segment) return candidate;
+    const evidenceSpan = await resolveSourceSpan(segment.text, candidate.evidenceText);
+    return { ...candidate, evidenceSpan, evaluation: localExtractiveEvaluation(evidenceSpan) };
+  }));
+}
+
+
 
 function validateInput(input: CardGenerationInput) {
   if (!input.requestId.trim() || !input.sourceId.trim() || !input.sourceTitle.trim()) {

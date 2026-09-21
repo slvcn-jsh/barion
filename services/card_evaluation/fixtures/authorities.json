@@ -1,0 +1,69 @@
+{
+  "fixtureVersion": "1.0.0",
+  "capturedAt": "2026-09-21T00:00:00+00:00",
+  "cases": [
+    {
+      "id": "disulfiram-timing-conflict",
+      "claim": "Disulfiram may be administered at least 8 hours after the last alcohol intake.",
+      "result": {
+        "verificationStatus": "conflict",
+        "authorityType": "official_drug_label",
+        "authorityName": "NIH National Library of Medicine DailyMed",
+        "authorityDocumentId": "d3832a1a-a140-49c1-a7df-134fa81341e3",
+        "authorityVersion": "11",
+        "authorityDate": "Jun 01, 2026",
+        "retrievedAt": "2026-09-21T00:00:00+00:00",
+        "evidenceText": "Disulfiram should never be administered until the patient has abstained from alcohol for at least 12 hours.",
+        "evidenceLocation": "DOSAGE AND ADMINISTRATION",
+        "evidenceUrl": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/d3832a1a-a140-49c1-a7df-134fa81341e3.xml",
+        "evidenceHash": "5428bf3191051b1930f06469fe6af1598ec63d6ec5e0076dec1085ff1dba9b90",
+        "agreesWithSource": false,
+        "confidence": 0.99,
+        "reason": "Source says 8 hours; current official label requires at least 12 hours.",
+        "cacheExpiresAt": "2026-10-21T00:00:00+00:00"
+      }
+    },
+    {
+      "id": "lithium-fluid-guidance",
+      "claim": "Patients taking lithium should maintain adequate salt and fluid intake.",
+      "result": {
+        "verificationStatus": "verified",
+        "authorityType": "official_drug_label",
+        "authorityName": "NIH National Library of Medicine DailyMed",
+        "authorityDocumentId": "f7f5b69a-c2a1-4586-a189-1475d41387c0",
+        "authorityVersion": "13",
+        "authorityDate": "Aug 24, 2026",
+        "retrievedAt": "2026-09-21T00:00:00+00:00",
+        "evidenceText": "it is essential for the patient to maintain a normal diet, including salt, and an adequate fluid intake",
+        "evidenceLocation": "PRECAUTIONS",
+        "evidenceUrl": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/f7f5b69a-c2a1-4586-a189-1475d41387c0.xml",
+        "evidenceHash": "f1ab15750521e134979d0b76ef321f15ef59a774ccf7ab11b8d66ea5bcc43720",
+        "agreesWithSource": true,
+        "confidence": 0.97,
+        "reason": "Current official label directly supports salt and fluid guidance.",
+        "cacheExpiresAt": "2026-10-21T00:00:00+00:00"
+      }
+    },
+    {
+      "id": "externally-correct-source-absent",
+      "claim": "Disulfiram reactions may occur with alcohol up to 14 days after ingesting disulfiram.",
+      "result": {
+        "verificationStatus": "verified",
+        "authorityType": "official_drug_label",
+        "authorityName": "NIH National Library of Medicine DailyMed",
+        "authorityDocumentId": "d3832a1a-a140-49c1-a7df-134fa81341e3",
+        "authorityVersion": "11",
+        "authorityDate": "Jun 01, 2026",
+        "retrievedAt": "2026-09-21T00:00:00+00:00",
+        "evidenceText": "He should also be warned that reactions may occur with alcohol up to 14 days after ingesting disulfiram.",
+        "evidenceLocation": "PRECAUTIONS",
+        "evidenceUrl": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/d3832a1a-a140-49c1-a7df-134fa81341e3.xml",
+        "evidenceHash": "de2a8d53cc8dac31a5727b66485419ca4551b7eace0ae2e7a791721af2863058",
+        "agreesWithSource": null,
+        "confidence": 0.98,
+        "reason": "Authority supports claim; source support remains absent.",
+        "cacheExpiresAt": "2026-10-21T00:00:00+00:00"
+      }
+    }
+  ]
+}

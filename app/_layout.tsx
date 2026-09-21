@@ -12,14 +12,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import type { Session } from '@supabase/supabase-js';
 
 import { AppButton } from '@/components/AppButton';
 import { BrandMark } from '@/components/BrandMark';
 import { initializeDatabase } from '@/storage/database';
 import { colors, fonts } from '@/theme/colors';
+import { restoreSession, onAuthStateChange, signOut, AuthContext } from '@/auth';
+
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -33,6 +36,10 @@ export default function RootLayout() {
   });
   const [databaseReady, setDatabaseReady] = useState(false);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+
+  // Auth state
+  const [session, setSession] = useState<Session | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
 
   const openDatabase = useCallback(() => {
     setDatabaseError(null);
@@ -52,6 +59,16 @@ export default function RootLayout() {
     if (fontsLoaded || fontError) openDatabase();
   }, [fontError, fontsLoaded, openDatabase]);
 
+  // Restore Supabase session on launch; subscribe to subsequent auth changes
+  useEffect(() => {
+    let cancelled = false;
+    void restoreSession().then((s) => {
+      if (!cancelled) { setSession(s); setSessionReady(true); }
+    });
+    const unsubscribe = onAuthStateChange((s) => { if (!cancelled) setSession(s); });
+    return () => { cancelled = true; unsubscribe(); };
+  }, []);
+
   if (!fontsLoaded && !fontError) {
     return null;
   }
@@ -61,38 +78,41 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          contentStyle: { backgroundColor: colors.canvas },
-          headerShadowVisible: false,
-          headerStyle: { backgroundColor: colors.canvas },
-          headerTitleStyle: { color: colors.ink, fontFamily: fonts.bold },
-          headerTintColor: colors.ink,
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false, title: 'BARION' }} />
-        <Stack.Screen name="study" options={{ title: 'Review' }} />
-        <Stack.Screen name="modes" options={{ headerShown: false, title: 'Ways to Study' }} />
-        <Stack.Screen name="calendar" options={{ headerShown: false, title: 'Review Calendar' }} />
-        <Stack.Screen name="match" options={{ headerShown: false, title: 'Match' }} />
-        <Stack.Screen name="print" options={{ title: 'Print Deck' }} />
-        <Stack.Screen name="sources" options={{ headerShown: false, title: 'Source Library' }} />
-        <Stack.Screen name="library" options={{ headerShown: false, title: 'Manage Library' }} />
-        <Stack.Screen name="data" options={{ headerShown: false, title: 'Data & Offline' }} />
-        <Stack.Screen name="profile" options={{ headerShown: false, title: 'Study Profile' }} />
-        <Stack.Screen name="classes" options={{ headerShown: false, title: 'Classes & Folders' }} />
-        <Stack.Screen name="courses" options={{ headerShown: false, title: 'Classes & Folders' }} />
-        <Stack.Screen name="more" options={{ headerShown: false, title: 'More' }} />
-        <Stack.Screen name="test" options={{ headerShown: false, title: 'Test Mode' }} />
-        <Stack.Screen name="deck/[id]" options={{ title: 'Deck' }} />
-        <Stack.Screen name="deck/new" options={{ title: 'New Deck' }} />
-        <Stack.Screen name="card/new" options={{ title: 'New Card' }} />
-        <Stack.Screen name="source/[id]" options={{ title: 'Source' }} />
-      </Stack>
-    </SafeAreaProvider>
+    <AuthContext.Provider value={{ session, sessionReady, signOut }}>
+      <SafeAreaProvider>
+        <StatusBar style="dark" />
+        <Stack
+          screenOptions={{
+            contentStyle: { backgroundColor: colors.canvas },
+            headerShadowVisible: false,
+            headerStyle: { backgroundColor: colors.canvas },
+            headerTitleStyle: { color: colors.ink, fontFamily: fonts.bold },
+            headerTintColor: colors.ink,
+            animation: 'slide_from_right',
+          }}
+        >
+          <Stack.Screen name="index" options={{ headerShown: false, title: 'BARION' }} />
+          <Stack.Screen name="study" options={{ title: 'Review' }} />
+          <Stack.Screen name="modes" options={{ headerShown: false, title: 'Ways to Study' }} />
+          <Stack.Screen name="calendar" options={{ headerShown: false, title: 'Review Calendar' }} />
+          <Stack.Screen name="match" options={{ headerShown: false, title: 'Match' }} />
+          <Stack.Screen name="print" options={{ title: 'Print Deck' }} />
+          <Stack.Screen name="sources" options={{ headerShown: false, title: 'Source Library' }} />
+          <Stack.Screen name="library" options={{ headerShown: false, title: 'Manage Library' }} />
+          <Stack.Screen name="data" options={{ headerShown: false, title: 'Data & Offline' }} />
+          <Stack.Screen name="profile" options={{ headerShown: false, title: 'Study Profile' }} />
+          <Stack.Screen name="classes" options={{ headerShown: false, title: 'Classes & Folders' }} />
+          <Stack.Screen name="courses" options={{ headerShown: false, title: 'Classes & Folders' }} />
+          <Stack.Screen name="more" options={{ headerShown: false, title: 'More' }} />
+          <Stack.Screen name="signin" options={{ headerShown: false, title: 'Sign In' }} />
+          <Stack.Screen name="test" options={{ headerShown: false, title: 'Test Mode' }} />
+          <Stack.Screen name="deck/[id]" options={{ title: 'Deck' }} />
+          <Stack.Screen name="deck/new" options={{ title: 'New Deck' }} />
+          <Stack.Screen name="card/new" options={{ title: 'New Card' }} />
+          <Stack.Screen name="source/[id]" options={{ title: 'Source' }} />
+        </Stack>
+      </SafeAreaProvider>
+    </AuthContext.Provider>
   );
 }
 

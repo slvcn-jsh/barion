@@ -1,3 +1,6 @@
+import type { SourceSpan } from '@/ai/sourceSpan';
+import type { ProductionEvaluation } from '@/ai/evaluation';
+
 export type SourceContext = {
   segmentId: string;
   locator: string;
@@ -19,6 +22,7 @@ export type ProviderGenerationRequest = {
   promptVersion: string;
   systemPrompt: string;
   userPrompt: string;
+  minCandidates: number;
   maxCandidates: number;
 };
 
@@ -49,6 +53,8 @@ export type GroundedCardCandidate = {
   question: string;
   answer: string;
   evidenceText: string;
+  evidenceSpan?: SourceSpan;
+  evaluation?: ProductionEvaluation;
 };
 
 export type CardGenerationProvenance = {

@@ -299,6 +299,13 @@ export type GeneratedCandidate = {
   answer: string;
   evidenceText: string;
   locator: string;
+  evidenceSpanJson?: string | null;
+  evaluationJson?: string | null;
+  originalCandidateJson?: string | null;
+  publicationDisposition: 'PUBLISH' | 'SANITIZE' | 'REVIEW' | 'REJECT';
+  evaluationVersion: string;
+  policyVersion: string;
+  sanitizationReason?: string | null;
   verificationStatus: string;
   supportScore: number;
   status: CandidateStatus;

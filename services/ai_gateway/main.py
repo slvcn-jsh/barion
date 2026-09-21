@@ -3,10 +3,17 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from pathlib import Path
+
+# Load environment variables from .env file in same directory as this file
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 from .config import GatewaySettings
 from .errors import GatewayError
@@ -19,20 +26,32 @@ from .models import (
 )
 from .orchestration import GenerationOrchestrator
 from .providers.gemini import GeminiGenerationProvider
-from .security import InMemoryRateLimiter, enforce_body_limit, require_gateway_token
+from .security import (
+    GatewayAuthenticator,
+    InMemoryRateLimiter,
+    StaticTokenAuthenticator,
+    SupabaseJWTAuthenticator,
+    enforce_body_limit,
+    require_gateway_identity,
+)
 
 
 def create_app(
     settings: GatewaySettings | None = None,
     orchestrator: GenerationOrchestrator | None = None,
+    authenticator: GatewayAuthenticator | None = None,
 ) -> FastAPI:
     resolved_settings = settings or GatewaySettings.from_env()
+    resolved_authenticator = authenticator or _create_authenticator(resolved_settings)
     provider = None
     if orchestrator is None and resolved_settings.gemini_api_key:
         provider = GeminiGenerationProvider(
             resolved_settings.gemini_api_key,
             resolved_settings.generation_model,
             resolved_settings.provider_timeout_seconds,
+            max_attempts=resolved_settings.provider_max_attempts,
+            retry_base_delay_seconds=resolved_settings.provider_retry_base_delay_seconds,
+            retry_max_delay_seconds=resolved_settings.provider_retry_max_delay_seconds,
         )
         orchestrator = GenerationOrchestrator(provider)
 
@@ -46,7 +65,7 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.orchestrator = orchestrator
     app.state.rate_limiter = InMemoryRateLimiter()
-    auth = require_gateway_token(resolved_settings.auth_token)
+    auth = require_gateway_identity(resolved_authenticator)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.allowed_origins),
@@ -70,8 +89,6 @@ def create_app(
     async def request_controls(request: Request, call_next):
         try:
             await enforce_body_limit(request, resolved_settings.max_request_bytes)
-            if request.url.path.startswith("/v1/") and request.url.path != "/v1/health":
-                app.state.rate_limiter.check(request.client.host if request.client else "unknown")
         except GatewayError as error:
             return _gateway_error_response(error)
         return await call_next(request)
@@ -108,15 +125,24 @@ def create_app(
 
     @app.post("/v1/bari/chat", response_model=BariChatResponse, dependencies=[Depends(auth)])
     async def bari_chat(request: BariChatRequest) -> BariChatResponse:
-        request_id = str(uuid4())
-        return BariChatResponse(
-            message="I couldn't find enough support for that in your selected material.",
-            evidence=request.evidence,
-            warnings=["Bari source-grounded chat generation is not enabled in this sprint."],
-            generation=BariGeneration(requestId=request_id),
-        )
+        if app.state.orchestrator is None:
+            raise GatewayError("provider_unavailable", "Chat provider is not configured.", 503, True)
+        return await app.state.orchestrator.bari_chat(request)
 
     return app
+
+
+def _create_authenticator(settings: GatewaySettings) -> GatewayAuthenticator:
+    if settings.auth_mode == "static":
+        return StaticTokenAuthenticator(settings.auth_token or "")
+    if not settings.supabase_issuer or not settings.supabase_jwks_url:
+        raise GatewayError("configuration_error", "Supabase authentication is not configured.", 503)
+    return SupabaseJWTAuthenticator(
+        settings.supabase_issuer,
+        settings.jwt_audience,
+        settings.supabase_jwks_url,
+        settings.max_access_token_lifetime_seconds,
+    )
 
 
 def _gateway_error_response(error: GatewayError) -> JSONResponse:

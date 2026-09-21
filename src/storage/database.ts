@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { seedDatabaseIfNeeded } from '@/storage/seed';
 
-export const DATABASE_VERSION = 17;
+export const DATABASE_VERSION = 19;
 
 let database: SQLite.SQLiteDatabase | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -196,6 +196,13 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       answer TEXT NOT NULL,
       evidence_text TEXT NOT NULL,
       locator TEXT NOT NULL DEFAULT '',
+      evidence_span_json TEXT,
+      evaluation_json TEXT,
+      original_candidate_json TEXT,
+      publication_disposition TEXT NOT NULL DEFAULT 'REVIEW',
+      evaluation_version TEXT NOT NULL DEFAULT 'legacy',
+      policy_version TEXT NOT NULL DEFAULT 'legacy',
+      sanitization_reason TEXT,
       verification_status TEXT NOT NULL,
       support_score REAL NOT NULL,
       status TEXT NOT NULL,
@@ -538,6 +545,13 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'default_deck_id',
       'TEXT REFERENCES decks(id) ON DELETE SET NULL',
     ),
+    generatedCandidateEvidenceSpan: await addColumnIfMissing(db, 'generated_candidates', 'evidence_span_json', 'TEXT'),
+    generatedCandidateEvaluation: await addColumnIfMissing(db, 'generated_candidates', 'evaluation_json', 'TEXT'),
+    generatedCandidateOriginal: await addColumnIfMissing(db, 'generated_candidates', 'original_candidate_json', 'TEXT'),
+    generatedCandidateDisposition: await addColumnIfMissing(db, 'generated_candidates', 'publication_disposition', "TEXT NOT NULL DEFAULT 'REVIEW'"),
+    generatedCandidateEvaluationVersion: await addColumnIfMissing(db, 'generated_candidates', 'evaluation_version', "TEXT NOT NULL DEFAULT 'legacy'"),
+    generatedCandidatePolicyVersion: await addColumnIfMissing(db, 'generated_candidates', 'policy_version', "TEXT NOT NULL DEFAULT 'legacy'"),
+    generatedCandidateSanitizationReason: await addColumnIfMissing(db, 'generated_candidates', 'sanitization_reason', 'TEXT'),
     generatedCandidateLocator: await addColumnIfMissing(
       db,
       'generated_candidates',

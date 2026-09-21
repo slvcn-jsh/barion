@@ -1,0 +1,115 @@
+{
+  "fixtureVersion": "1.0.0",
+  "cases": [
+    {
+      "caseId": "lithium_segment_support",
+      "segments": [{"segmentId":"s1","locator":"Page 1","sectionPath":"Lithium","text":"Hyponatremia increases lithium toxicity. Patients should maintain sodium intake at approximately 1500 mg/day.","startOffset":0,"endOffset":108}],
+      "card": {"cardId":"lithium","question":"What sodium intake should patients maintain while taking lithium?","answer":"Answer: Maintain sodium intake at approximately 1500 mg/day.","system":"production","segmentId":"s1","locator":"Page 1","cardType":"instruction","learningObjective":"Recall lithium sodium guidance.","evidenceText":"Hyponatremia increases lithium toxicity."},
+      "expected": {"decision":"REVIEW","sourceSupport":["supported_by_segment"],"citationStatus":["partial"],"claimTypes":["dose"],"riskLevels":["high"],"numericValues":[1500.0],"validationCodes":["NUMERIC_CLAIM_CLASSIFIED"]}
+    },
+    {
+      "caseId": "disulfiram_segment_support",
+      "segments": [{"segmentId":"s2","locator":"Page 2","sectionPath":"Disulfiram","text":"Disulfiram plus alcohol causes a severe reaction. Wait 8 hours after the last alcohol intake before starting disulfiram.","startOffset":0,"endOffset":113}],
+      "card": {"cardId":"disulfiram","question":"When may disulfiram be started?","answer":"Answer: Wait 8 hours after the last alcohol intake before starting disulfiram.","system":"production","segmentId":"s2","locator":"Page 2","cardType":"instruction","learningObjective":"Recall initiation timing.","evidenceText":"Disulfiram plus alcohol causes a severe reaction."},
+      "expected": {"decision":"REVIEW","sourceSupport":["supported_by_segment"],"citationStatus":["partial"],"claimTypes":["medication_timing"],"riskLevels":["high"],"numericValues":[8.0],"validationCodes":["NUMERIC_CLAIM_CLASSIFIED"]}
+    },
+    {
+      "caseId": "anorexia_internal_contradiction",
+      "segments": [{"segmentId":"s3","locator":"Page 3","sectionPath":"Anorexia","text":"Anorexia criterion: body weight is less than 85% of expected weight.","startOffset":0,"endOffset":68}],
+      "card": {"cardId":"anorexia","question":"What weight threshold is listed?","answer":"Answer: Body weight is less than 85% of expected weight.\nStudy note: Body weight is less than 15% of expected weight.","system":"production","segmentId":"s3","locator":"Page 3","cardType":"definition","learningObjective":"Recall weight threshold.","evidenceText":"Anorexia criterion: body weight is less than 85% of expected weight."},
+      "expected": {"decision":"REJECT","sourceSupport":["contradicted","supported_by_citation"],"citationStatus":["exact","uncertain"],"claimTypes":["percentage"],"riskLevels":["moderate"],"numericValues":[15.0,85.0],"validationCodes":["INTERNAL_NUMERIC_CONTRADICTION","NUMERIC_CLAIM_CLASSIFIED","SOURCE_CONTRADICTION"]}
+    },
+    {
+      "caseId": "good_core_bad_extra",
+      "segments": [{"segmentId":"s4","locator":"Page 4","sectionPath":"Metformin","text":"Metformin reduces hepatic glucose production.","startOffset":0,"endOffset":45}],
+      "card": {"cardId":"sanitize","question":"How does metformin affect hepatic glucose production?","answer":"Answer: Metformin reduces hepatic glucose production.\nWhy it matters: It permanently cures every patient.","system":"production","segmentId":"s4","locator":"Page 4","cardType":"mechanism","learningObjective":"Recall metformin mechanism.","evidenceText":"Metformin reduces hepatic glucose production."},
+      "expected": {"decision":"SANITIZE","sourceSupport":["supported_by_citation","unsupported"],"citationStatus":["exact","uncertain"],"claimTypes":["factual"],"riskLevels":["low"],"validationCodes":["UNSUPPORTED_CLAIM"]}
+    },
+    {
+      "caseId": "document_only_support",
+      "segments": [{"segmentId":"s5","locator":"Page 5","sectionPath":"Intro","text":"A general introduction without the target fact.","startOffset":0,"endOffset":47},{"segmentId":"s6","locator":"Page 6","sectionPath":"Mechanism","text":"Insulin lowers blood glucose.","startOffset":0,"endOffset":29}],
+      "card": {"cardId":"document","question":"What does insulin do?","answer":"Answer: Insulin lowers blood glucose.","system":"production","segmentId":"s5","locator":"Page 5","cardType":"mechanism","learningObjective":"Recall insulin action.","evidenceText":"A general introduction without the target fact."},
+      "expected": {"decision":"REVIEW","sourceSupport":["supported_elsewhere_in_source"],"citationStatus":["uncertain"],"claimTypes":["factual"],"riskLevels":["low"],"validationCodes":[]}
+    },
+    {
+      "caseId": "source_absent_plausible",
+      "segments": [{"segmentId":"s7","locator":"Page 7","sectionPath":"Other","text":"The source discusses unrelated material.","startOffset":0,"endOffset":40}],
+      "card": {"cardId":"absent","question":"What is a plausible fact?","answer":"Answer: Water freezes at 0 degrees Celsius.","system":"production","segmentId":"s7","locator":"Page 7","cardType":"definition","learningObjective":"Recall a fact.","evidenceText":"The source discusses unrelated material."},
+      "expected": {"decision":"REJECT","sourceSupport":["unsupported"],"citationStatus":["uncertain"],"claimTypes":["numeric"],"riskLevels":["moderate"],"numericValues":[0.0],"validationCodes":["NUMERIC_CLAIM_CLASSIFIED","QUESTION_ANSWER_ENTITY_MISMATCH","UNSUPPORTED_CLAIM"]}
+    },
+    {
+      "caseId": "exact_duplicate_deck",
+      "segments": [],
+      "cards": [
+        {"cardId":"exact-a","question":"What does metformin reduce?","answer":"Answer: Metformin reduces hepatic glucose production.","system":"production"},
+        {"cardId":"exact-b","question":"What does metformin reduce?","answer":"Answer: Metformin reduces hepatic glucose production.","system":"production"}
+      ],
+      "expected": {"validationCodes":["EXACT_OR_NEAR_DUPLICATE"]}
+    },
+    {
+      "caseId": "near_duplicate_deck",
+      "segments": [],
+      "cards": [
+        {"cardId":"near-a","question":"What action does metformin take?","answer":"Answer: It reduces hepatic glucose production.","system":"production"},
+        {"cardId":"near-b","question":"What action does metformin take in the liver?","answer":"Answer: It reduces hepatic glucose production.","system":"production"}
+      ],
+      "expected": {"validationCodes":["EXACT_OR_NEAR_DUPLICATE"]}
+    },
+    {
+      "caseId": "source_start_concentrated_deck",
+      "segments": [
+        {"segmentId":"s1","locator":"Page 1","sectionPath":"One","text":"Mercury circles the sun.","startOffset":0,"endOffset":24},
+        {"segmentId":"s2","locator":"Page 2","sectionPath":"Two","text":"Venus has a dense atmosphere.","startOffset":0,"endOffset":29},
+        {"segmentId":"s3","locator":"Page 3","sectionPath":"Three","text":"Earth contains liquid oceans.","startOffset":0,"endOffset":29},
+        {"segmentId":"s4","locator":"Page 4","sectionPath":"Four","text":"Mars has iron-rich soil.","startOffset":0,"endOffset":24},
+        {"segmentId":"s5","locator":"Page 5","sectionPath":"Five","text":"Jupiter has a large storm.","startOffset":0,"endOffset":26},
+        {"segmentId":"s6","locator":"Page 6","sectionPath":"Six","text":"Saturn has visible rings.","startOffset":0,"endOffset":25},
+        {"segmentId":"s7","locator":"Page 7","sectionPath":"Seven","text":"Uranus rotates on its side.","startOffset":0,"endOffset":27},
+        {"segmentId":"s8","locator":"Page 8","sectionPath":"Eight","text":"Neptune has strong winds.","startOffset":0,"endOffset":25},
+        {"segmentId":"s9","locator":"Page 9","sectionPath":"Nine","text":"Ceres is a dwarf planet.","startOffset":0,"endOffset":24},
+        {"segmentId":"s10","locator":"Page 10","sectionPath":"Ten","text":"Pluto has an eccentric orbit.","startOffset":0,"endOffset":29}
+      ],
+      "cards": [
+        {"cardId":"start-1","question":"Which planet circles the sun?","answer":"Answer: Mercury circles the sun.","system":"production","segmentId":"s1"},
+        {"cardId":"start-2","question":"Which world is closest to the sun?","answer":"Answer: Mercury is closest to the sun.","system":"production","segmentId":"s1"},
+        {"cardId":"start-3","question":"Which world has a cratered surface?","answer":"Answer: Mercury has a cratered surface.","system":"production","segmentId":"s1"},
+        {"cardId":"start-4","question":"Which planet has extreme temperatures?","answer":"Answer: Mercury has extreme temperatures.","system":"production","segmentId":"s1"},
+        {"cardId":"start-5","question":"Which planet has almost no atmosphere?","answer":"Answer: Mercury has almost no atmosphere.","system":"production","segmentId":"s1"},
+        {"cardId":"start-6","question":"Which small planet moves quickly?","answer":"Answer: Mercury moves quickly.","system":"production","segmentId":"s1"},
+        {"cardId":"start-7","question":"Which planet bears Caloris Basin?","answer":"Answer: Mercury bears Caloris Basin.","system":"production","segmentId":"s1"},
+        {"cardId":"start-8","question":"Which planet lacks natural moons?","answer":"Answer: Mercury lacks natural moons.","system":"production","segmentId":"s1"},
+        {"cardId":"start-9","question":"Which rocky world has a metallic core?","answer":"Answer: Mercury has a metallic core.","system":"production","segmentId":"s1"},
+        {"cardId":"start-10","question":"Which planet completes a short year?","answer":"Answer: Mercury completes a short year.","system":"production","segmentId":"s1"}
+      ],
+      "expected": {"validationCodes":["START_CONCENTRATED_DECK"]}
+    },
+    {
+      "caseId": "distributed_valid_deck",
+      "segments": [
+        {"segmentId":"s1","locator":"Page 1","sectionPath":"One","text":"Mercury circles the sun.","startOffset":0,"endOffset":24},
+        {"segmentId":"s2","locator":"Page 2","sectionPath":"Two","text":"Venus has a dense atmosphere.","startOffset":0,"endOffset":29},
+        {"segmentId":"s3","locator":"Page 3","sectionPath":"Three","text":"Earth contains liquid oceans.","startOffset":0,"endOffset":29},
+        {"segmentId":"s4","locator":"Page 4","sectionPath":"Four","text":"Mars has iron-rich soil.","startOffset":0,"endOffset":24},
+        {"segmentId":"s5","locator":"Page 5","sectionPath":"Five","text":"Jupiter has a large storm.","startOffset":0,"endOffset":26},
+        {"segmentId":"s6","locator":"Page 6","sectionPath":"Six","text":"Saturn has visible rings.","startOffset":0,"endOffset":25},
+        {"segmentId":"s7","locator":"Page 7","sectionPath":"Seven","text":"Uranus rotates on its side.","startOffset":0,"endOffset":27},
+        {"segmentId":"s8","locator":"Page 8","sectionPath":"Eight","text":"Neptune has strong winds.","startOffset":0,"endOffset":25},
+        {"segmentId":"s9","locator":"Page 9","sectionPath":"Nine","text":"Ceres is a dwarf planet.","startOffset":0,"endOffset":24},
+        {"segmentId":"s10","locator":"Page 10","sectionPath":"Ten","text":"Pluto has an eccentric orbit.","startOffset":0,"endOffset":29}
+      ],
+      "cards": [
+        {"cardId":"wide-1","question":"What circles near the sun?","answer":"Answer: Mercury circles the sun.","system":"production","segmentId":"s1"},
+        {"cardId":"wide-2","question":"What has a dense atmosphere?","answer":"Answer: Venus has a dense atmosphere.","system":"production","segmentId":"s2"},
+        {"cardId":"wide-3","question":"What contains liquid oceans?","answer":"Answer: Earth contains liquid oceans.","system":"production","segmentId":"s3"},
+        {"cardId":"wide-4","question":"What has iron-rich soil?","answer":"Answer: Mars has iron-rich soil.","system":"production","segmentId":"s4"},
+        {"cardId":"wide-5","question":"What has a large storm?","answer":"Answer: Jupiter has a large storm.","system":"production","segmentId":"s5"},
+        {"cardId":"wide-6","question":"What has visible rings?","answer":"Answer: Saturn has visible rings.","system":"production","segmentId":"s6"},
+        {"cardId":"wide-7","question":"What rotates on its side?","answer":"Answer: Uranus rotates on its side.","system":"production","segmentId":"s7"},
+        {"cardId":"wide-8","question":"What has strong winds?","answer":"Answer: Neptune has strong winds.","system":"production","segmentId":"s8"},
+        {"cardId":"wide-9","question":"What is a dwarf planet?","answer":"Answer: Ceres is a dwarf planet.","system":"production","segmentId":"s9"},
+        {"cardId":"wide-10","question":"What has an eccentric orbit?","answer":"Answer: Pluto has an eccentric orbit.","system":"production","segmentId":"s10"}
+      ],
+      "expected": {"validationCodes":[]}
+    }
+  ]
+}

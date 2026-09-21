@@ -44,7 +44,7 @@ describe('generateGroundedCards', () => {
       providerId: 'upstream-provider',
       modelId: 'upstream-model',
       promptId: 'grounded-card-generation',
-      promptVersion: '1.0.0',
+      promptVersion: '1.2.0',
       providerRequestId: 'provider-request-1',
     }));
     expect(events).toHaveLength(1);
@@ -94,7 +94,10 @@ describe('generateGroundedCards', () => {
       }],
     }, () => localCandidates);
 
-    expect(result.candidates).toEqual(localCandidates);
+    expect(result.candidates).toEqual([expect.objectContaining({
+      ...localCandidates[0],
+      evidenceSpan: expect.objectContaining({ status: 'exact', startOffset: 0, endOffset: 30 }),
+    })]);
     expect(result.provenance).toEqual(expect.objectContaining({
       providerId: 'local-extractive',
       modelId: 'barion-extractive-rules',

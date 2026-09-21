@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "offsetEncoding": "utf16-code-units",
+  "boundaryConvention": "half-open",
+  "cases": [
+    {"id":"unicode-exact","source":"A😀 é dose ５ mg","evidence":"😀 é","expected":{"status":"exact","startOffset":1,"endOffset":6}},
+    {"id":"normalized-width-space","source":"Dose ５\tmg daily","evidence":"Dose 5 mg daily","expected":{"status":"normalized","startOffset":0,"endOffset":15}},
+    {"id":"context","source":"alpha dose beta; gamma dose delta","evidence":"dose","contextBefore":"gamma ","contextAfter":" delta","expected":{"status":"context-disambiguated","startOffset":23,"endOffset":27}},
+    {"id":"ambiguous","source":"dose and dose","evidence":"dose","expected":{"status":"ambiguous","startOffset":null,"endOffset":null}},
+    {"id":"not-found","source":"source","evidence":"missing","expected":{"status":"not-found","startOffset":null,"endOffset":null}},
+    {"id":"invalid","source":"source","evidence":"","expected":{"status":"invalid","startOffset":null,"endOffset":null}},
+    {"id":"stale","source":"source","evidence":"source","expectedSourceTextSha256":"0000000000000000000000000000000000000000000000000000000000000000","expected":{"status":"stale-source","startOffset":null,"endOffset":null}}
+  ]
+}

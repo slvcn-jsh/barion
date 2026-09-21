@@ -1,4 +1,6 @@
+import { sourceSpanEvaluation } from '@/ai/evaluation';
 import { BarionAIError } from '@/ai/errors';
+import { resolveSourceSpan } from '@/ai/sourceSpan';
 import type { GroundedCardCandidate, SourceContext } from '@/ai/types';
 
 const MAX_CANDIDATES = 100;
@@ -18,11 +20,11 @@ export class AIResponseValidationError extends BarionAIError {
   }
 }
 
-export function parseGroundedCardResponse(
+export async function parseGroundedCardResponse(
   value: unknown,
   segments: SourceContext[],
   requestedMaximum: number,
-): GroundedCardCandidate[] {
+): Promise<GroundedCardCandidate[]> {
   const issues: ValidationIssue[] = [];
   const root = asRecord(value);
   if (!root || !Array.isArray(root.candidates)) {
@@ -38,12 +40,12 @@ export function parseGroundedCardResponse(
   const seen = new Set<string>();
   const candidates: GroundedCardCandidate[] = [];
 
-  root.candidates.forEach((rawCandidate, index) => {
+  for (const [index, rawCandidate] of root.candidates.entries()) {
     const path = `candidates[${index}]`;
     const candidate = asRecord(rawCandidate);
     if (!candidate) {
       issues.push({ path, reason: 'must be an object' });
-      return;
+      continue;
     }
 
     const segmentId = readString(candidate, 'segmentId', path, issues, 1, 200);
@@ -53,22 +55,23 @@ export function parseGroundedCardResponse(
     const answer = readString(candidate, 'answer', path, issues, 1, 2000);
     const evidenceText = readString(candidate, 'evidenceText', path, issues, 1, 4000);
 
-    if (!segmentId || !cardType || !learningObjective || !question || !answer || !evidenceText) return;
+    if (!segmentId || !cardType || !learningObjective || !question || !answer || !evidenceText) continue;
 
     const segment = segmentById.get(segmentId);
     if (!segment) {
       issues.push({ path: `${path}.segmentId`, reason: 'must reference a supplied source segment' });
-      return;
+      continue;
     }
-    if (!segment.text.includes(evidenceText)) {
-      issues.push({ path: `${path}.evidenceText`, reason: 'must be a verbatim substring of its source segment' });
-      return;
+    const evidenceSpan = await resolveSourceSpan(segment.text, evidenceText);
+    if (!['exact', 'normalized', 'context-disambiguated'].includes(evidenceSpan.status)) {
+      issues.push({ path: `${path}.evidenceText`, reason: 'must resolve uniquely in its source segment' });
+      continue;
     }
 
     const duplicateKey = normalize(`${question}\n${answer}`);
     if (seen.has(duplicateKey)) {
       issues.push({ path, reason: 'duplicates an earlier candidate' });
-      return;
+      continue;
     }
     seen.add(duplicateKey);
     candidates.push({
@@ -79,8 +82,10 @@ export function parseGroundedCardResponse(
       question,
       answer,
       evidenceText,
+      evidenceSpan,
+      evaluation: sourceSpanEvaluation(evidenceSpan),
     });
-  });
+  }
 
   if (issues.length) throw new AIResponseValidationError(issues);
   return candidates;

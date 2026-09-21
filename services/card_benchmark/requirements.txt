@@ -1,0 +1,2 @@
+-r ../ai_gateway/requirements.txt
+pymupdf==1.28.2

@@ -1,0 +1,77 @@
+{
+  "fixtureVersion": "1.0.0",
+  "cases": [
+    {
+      "caseId": "exact-paraphrase",
+      "concept": "Metformin reduces hepatic glucose production.",
+      "label": "Metformin",
+      "aliases": [],
+      "question": "How does metformin affect liver glucose output?",
+      "answer": "Metformin reduces hepatic glucose production.",
+      "expectedMatch": true
+    },
+    {
+      "caseId": "medical-alias",
+      "concept": "Myocardial infarction causes death of heart muscle after interrupted blood flow.",
+      "label": "Myocardial infarction",
+      "aliases": ["heart attack"],
+      "question": "What happens during a heart attack?",
+      "answer": "Interrupted blood flow causes death of heart muscle.",
+      "expectedMatch": true
+    },
+    {
+      "caseId": "treatment-synonym",
+      "concept": "Stop the medication immediately when severe toxicity occurs.",
+      "label": "Severe toxicity response",
+      "aliases": ["discontinue medication"],
+      "question": "What action is required for severe toxicity?",
+      "answer": "Discontinue the medication immediately.",
+      "expectedMatch": true
+    },
+    {
+      "caseId": "numeric-unit-conflict",
+      "concept": "Lithium dose is 300 mg daily.",
+      "label": "Lithium dose",
+      "aliases": [],
+      "question": "What is the daily lithium dose?",
+      "answer": "Lithium dose is 300 g daily.",
+      "expectedMatch": false
+    },
+    {
+      "caseId": "negation-conflict",
+      "concept": "Medication X is not safe during pregnancy.",
+      "label": "Medication X pregnancy safety",
+      "aliases": [],
+      "question": "Is medication X safe during pregnancy?",
+      "answer": "Medication X is safe during pregnancy.",
+      "expectedMatch": false
+    },
+    {
+      "caseId": "relation-conflict",
+      "concept": "Treatment decreases blood pressure.",
+      "label": "Treatment effect",
+      "aliases": [],
+      "question": "How does treatment affect blood pressure?",
+      "answer": "Treatment increases blood pressure.",
+      "expectedMatch": false
+    },
+    {
+      "caseId": "topic-only-overlap",
+      "concept": "Lithium toxicity causes coarse tremor and confusion.",
+      "label": "Lithium toxicity",
+      "aliases": [],
+      "question": "What is lithium?",
+      "answer": "Lithium is a medication used in psychiatry.",
+      "expectedMatch": false
+    },
+    {
+      "caseId": "unrelated",
+      "concept": "Cognitive behavioral therapy changes maladaptive thought patterns.",
+      "label": "Cognitive behavioral therapy",
+      "aliases": ["CBT"],
+      "question": "What is the therapeutic lithium range?",
+      "answer": "The source lists a serum concentration range.",
+      "expectedMatch": false
+    }
+  ]
+}

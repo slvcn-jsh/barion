@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
     "@expo/vector-icons": "^15.0.2",
+    "@supabase/supabase-js": "^2.116.0",
     "expo": "~57.0.23",
     "expo-constants": "~57.0.18",
     "expo-crypto": "~57.0.3",
@@ -59,6 +60,9 @@
     "eas:link": "npx eas-cli@latest init",
     "web": "node scripts/start-web.js",
     "gateway": "python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790",
+    "benchmark:cards": "python -m services.card_benchmark",
+    "benchmark:cards:dry": "python -m services.card_benchmark --dry-run",
+    "test:benchmark": "python -m pytest services/card_benchmark/tests -q",
     "test:gateway": "python -m pytest services/ai_gateway/tests -q",
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",

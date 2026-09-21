@@ -13,6 +13,7 @@ const request = {
   promptVersion: '1.0.0',
   systemPrompt: 'system',
   userPrompt: 'user',
+  minCandidates: 4,
   maxCandidates: 5,
 };
 
@@ -65,6 +66,58 @@ describe('createGatewayCardGenerationProvider', () => {
       Authorization: 'Bearer short-lived-user-token',
     });
     expect((fetchImplementation as jest.Mock).mock.calls[0][1].body).not.toContain('short-lived-user-token');
+  });
+  it('falls back to config.accessToken when accessTokenProvider returns null', async () => {
+    const fetchImplementation = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ output: { candidates: [] } }),
+    })) as unknown as typeof fetch;
+    const accessTokenProvider = jest.fn().mockResolvedValue(null);
+
+    await createGatewayCardGenerationProvider(
+      { ...config, accessToken: 'fallback-static-token' },
+      fetchImplementation,
+      accessTokenProvider,
+    ).generate(request);
+
+    expect((fetchImplementation as jest.Mock).mock.calls[0][1].headers).toEqual({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer fallback-static-token',
+    });
+  });
+
+
+  it('refreshes session once after 401 and retries with the new access token', async () => {
+    const fetchImplementation = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401 })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ output: { candidates: [] } }) }) as unknown as typeof fetch;
+    const accessTokenProvider = jest
+      .fn()
+      .mockResolvedValueOnce('expired-access-token')
+      .mockResolvedValueOnce('refreshed-access-token');
+
+    await createGatewayCardGenerationProvider(config, fetchImplementation, accessTokenProvider).generate(request);
+
+    expect(accessTokenProvider).toHaveBeenNthCalledWith(1, false);
+    expect(accessTokenProvider).toHaveBeenNthCalledWith(2, true);
+    expect((fetchImplementation as jest.Mock).mock.calls[0][1].headers.Authorization)
+      .toBe('Bearer expired-access-token');
+    expect((fetchImplementation as jest.Mock).mock.calls[1][1].headers.Authorization)
+      .toBe('Bearer refreshed-access-token');
+  });
+
+  it('does not loop when refreshed access token is rejected', async () => {
+    const fetchImplementation = jest.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch;
+    const accessTokenProvider = jest
+      .fn()
+      .mockResolvedValueOnce('expired-access-token')
+      .mockResolvedValueOnce('rejected-access-token');
+
+    await expect(createGatewayCardGenerationProvider(config, fetchImplementation, accessTokenProvider).generate(request))
+      .rejects.toEqual(expect.objectContaining({ code: 'authentication_error', httpStatus: 401 }));
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(accessTokenProvider).toHaveBeenCalledTimes(2);
   });
 
   it.each([

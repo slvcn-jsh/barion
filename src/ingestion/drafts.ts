@@ -1,3 +1,4 @@
+import type { SourceSpan } from '@/ai/sourceSpan';
 import type { ParsedSegment } from './types';
 import type { ExamGoal, ReviewStyle, StudyDifficulty } from '@/domain/types';
 
@@ -24,6 +25,7 @@ export type ExtractiveDraft = {
   question: string;
   answer: string;
   evidenceText: string;
+  evidenceSpan?: SourceSpan;
 };
 
 export type DraftGenerationPreferences = {

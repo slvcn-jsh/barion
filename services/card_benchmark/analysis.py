@@ -18,19 +18,15 @@ def tokens(text: str) -> list[str]:
 
 
 def freeze_concepts(segments: list[Segment]) -> list[Concept]:
-    """Create deterministic source-only inventory before viewing either card set."""
-    concepts: list[Concept] = []
-    for segment in segments:
-        sentences = re.split(r"(?<=[.!?])\s+|\n+", segment.text)
-        for sentence in sentences:
-            clean = " ".join(sentence.split()).strip(" •▪-\t")
-            concept_tokens = tuple(dict.fromkeys(tokens(clean)))
-            if 4 <= len(concept_tokens) and 25 <= len(clean) <= 320:
-                concepts.append(Concept(
-                    conceptId=f"concept-{len(concepts) + 1:04d}", locator=segment.locator,
-                    segmentId=segment.segmentId, text=clean, tokens=concept_tokens,
-                ))
-    return concepts
+    """Compatibility adapter. Canonical CLI inventory uses structural extraction."""
+    from .extraction import extract_structural_units
+    from .inventory import build_concept_inventory
+    from .models import Page
+
+    pages = [Page(segment.locator, segment.text, index, "compat-source") for index, segment in enumerate(segments)]
+    compat_segments = [Segment(segment.segmentId, segment.locator, segment.sectionPath, segment.text, 0, len(segment.text))
+                       for segment in segments]
+    return build_concept_inventory(extract_structural_units(pages, compat_segments, "Benchmark source"))
 
 
 def analyze_system(cards: list[Card], concepts: list[Concept], source_text: str) -> tuple[dict[str, object], list[dict[str, object]]]:
@@ -61,11 +57,10 @@ def analyze_system(cards: list[Card], concepts: list[Concept], source_text: str)
             **asdict(card),
             "structuralComplianceScore": structural,
             "pedagogicalProxyScore": pedagogical,
-            "groundingScore": grounding,
+            "lexicalOverlapDiagnostic": grounding,
             "matchedConceptId": matched.conceptId if matched else "",
             "conceptMatchJaccard": round(match_score, 4),
             "conceptTokenRecall": round(match_recall, 4),
-            "sourceSupported": grounding >= 0.72 if card.system == "quizlet" else bool(card.evidenceText),
         })
     duplicate_count = sum(len(cluster) - 1 for cluster in duplicates)
     summary: dict[str, object] = {
@@ -77,8 +72,8 @@ def analyze_system(cards: list[Card], concepts: list[Concept], source_text: str)
         "duplicateRate": round(duplicate_count / len(cards), 4) if cards else 0.0,
         "meanStructuralComplianceScore": mean(structural_scores) if all(card.system == "production" for card in cards) else None,
         "meanPedagogicalProxyScore": mean(pedagogical_scores),
-        "meanGroundingScore": mean(grounded_scores),
-        "sourceSupportedRate": round(sum(bool(row["sourceSupported"]) for row in rows) / len(rows), 4) if rows else 0.0,
+        "meanLexicalOverlapDiagnostic": mean(grounded_scores),
+        "meanGroundingScore": mean(grounded_scores),  # Deprecated diagnostic compatibility key.
     }
     return summary, rows
 
@@ -225,6 +220,24 @@ def pedagogical_proxy(card: Card) -> float:
     if len(set(tokens(core_answer(card.answer)))) >= 2:
         score += 0.10
     return round(score, 2)
+
+
+def decompose_claims(text: str) -> list[str]:
+    """Compatibility wrapper over versioned deterministic claim extraction."""
+    from .claims import extract_text_claims
+
+    return [claim.claimText for claim in extract_text_claims("compat", "core_answer", text)]
+
+
+def detect_regression_failures(card: Card) -> list[str]:
+    """Compatibility wrapper over general normalization and validation rules."""
+    from .claims import extract_claims
+    from .normalization import normalize_card
+    from .validators import validate_card
+
+    normalized = normalize_card(card)
+    claims, _states = extract_claims(normalized)
+    return [result.code for result in validate_card(normalized, claims, [], [])]
 
 
 def card_quality(card: Card) -> float:

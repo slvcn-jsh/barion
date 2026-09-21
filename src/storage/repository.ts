@@ -2,9 +2,15 @@ import * as DocumentPicker from 'expo-document-picker';
 import type * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 
+import {
+  describeGatewayCardQuality,
+  evaluateGatewayCardQuality,
+  shouldAutoPublishCandidate,
+} from '@/ai/cardQuality';
 import { readExpoPublicGatewayConfig } from '@/ai/config';
 import { asBarionAIError } from '@/ai/errors';
 import { createGatewayCardGenerationProvider } from '@/ai/gatewayProvider';
+import { createSupabaseAccessTokenProvider } from '@/auth/sessionProvider';
 import { generateGroundedCardsWithFallback } from '@/ai/generate';
 import type { GroundedCardCandidate } from '@/ai/types';
 import { createId, nowIso } from '@/domain/ids';
@@ -1119,6 +1125,13 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       generated_candidates.answer,
       generated_candidates.evidence_text AS evidenceText,
       generated_candidates.locator,
+      generated_candidates.evidence_span_json AS evidenceSpanJson,
+      generated_candidates.evaluation_json AS evaluationJson,
+      generated_candidates.original_candidate_json AS originalCandidateJson,
+      generated_candidates.publication_disposition AS publicationDisposition,
+      generated_candidates.evaluation_version AS evaluationVersion,
+      generated_candidates.policy_version AS policyVersion,
+      generated_candidates.sanitization_reason AS sanitizationReason,
       generated_candidates.verification_status AS verificationStatus,
       generated_candidates.support_score AS supportScore,
       generated_candidates.status,
@@ -1734,7 +1747,9 @@ export async function generateDraftsForSource(sourceId: string) {
   let provider = null;
   try {
     const config = readExpoPublicGatewayConfig();
-    provider = config ? createGatewayCardGenerationProvider(config) : null;
+    provider = config
+      ? createGatewayCardGenerationProvider(config, fetch, createSupabaseAccessTokenProvider())
+      : null;
   } catch (error) {
     gatewayConfigError = asBarionAIError(error).code;
   }
@@ -1798,17 +1813,18 @@ export async function generateDraftsForSource(sourceId: string) {
 
     for (const draft of drafts) {
       const candidateId = createId('candidate');
-      const qualityScore = localGeneration ? draftQuality(draft) : 0.76;
+      const qualityScore = localGeneration ? draftQuality(draft) : evaluateGatewayCardQuality(draft);
       const qualityNotes = localGeneration
         ? draftQualityNotes(draft)
-        : 'Gateway-generated and source-grounded; requires user review before publishing.';
-      if (localGeneration && qualityScore >= AUTO_PUBLISH_QUALITY_SCORE) {
+        : describeGatewayCardQuality(draft, qualityScore);
+      if (draft.evaluation?.publicationDisposition === 'PUBLISH'
+          && shouldAutoPublishCandidate(qualityScore, localGeneration, AUTO_PUBLISH_QUALITY_SCORE)) {
         candidateIds.push(candidateId);
       }
       await txn.runAsync(
         `INSERT INTO generated_candidates
-         (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, verification_status, support_score, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, evidence_span_json, evaluation_json, original_candidate_json, publication_disposition, evaluation_version, policy_version, verification_status, support_score, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         candidateId,
         jobId,
         draft.segmentId,
@@ -1820,7 +1836,15 @@ export async function generateDraftsForSource(sourceId: string) {
         draft.answer,
         draft.evidenceText,
         draft.locator,
-        localGeneration ? 'extractive-source-match' : 'gateway-source-match',
+        draft.evidenceSpan ? JSON.stringify(draft.evidenceSpan) : null,
+        draft.evaluation ? JSON.stringify(draft.evaluation) : null,
+        JSON.stringify({ question: draft.question, answer: draft.answer, evidenceText: draft.evidenceText }),
+        draft.evaluation?.publicationDisposition ?? 'REVIEW',
+        draft.evaluation?.evaluationVersion ?? 'legacy',
+        draft.evaluation?.policyVersion ?? 'legacy',
+        draft.evidenceSpan && ['exact', 'normalized', 'context-disambiguated'].includes(draft.evidenceSpan.status)
+          ? localGeneration ? 'extractive-source-match' : 'gateway-evidence-span-verified'
+          : 'needs-source-review',
         1,
         'pending',
         now,
@@ -1865,13 +1889,15 @@ export async function generateDraftsForSource(sourceId: string) {
 function draftQuality(draft: GroundedCardCandidate) {
   return 'qualityScore' in draft && typeof draft.qualityScore === 'number'
     ? draft.qualityScore
-    : 0.76;
+    : evaluateGatewayCardQuality(draft);
 }
 
 function draftQualityNotes(draft: GroundedCardCandidate) {
-  return 'qualityNotes' in draft && typeof draft.qualityNotes === 'string'
-    ? draft.qualityNotes
-    : 'Source-grounded draft requires user review before publishing.';
+  if ('qualityNotes' in draft && typeof draft.qualityNotes === 'string') {
+    return draft.qualityNotes;
+  }
+  const score = evaluateGatewayCardQuality(draft);
+  return describeGatewayCardQuality(draft, score);
 }
 
 export async function approveCandidate(candidateId: string, deckId?: string, automated = false) {
@@ -1891,6 +1917,7 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
     answer: string;
     evidenceText: string;
     verificationStatus: string;
+    publicationDisposition: string;
     supportScore: number;
     status: CandidateStatus;
   }>(
@@ -1909,6 +1936,7 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
        generated_candidates.answer,
        generated_candidates.evidence_text AS evidenceText,
        generated_candidates.verification_status AS verificationStatus,
+       generated_candidates.publication_disposition AS publicationDisposition,
        generated_candidates.support_score AS supportScore,
        generated_candidates.status
      FROM generated_candidates
@@ -1920,6 +1948,12 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
 
   if (!candidate || candidate.status !== 'pending') {
     throw new Error('This draft is no longer available for approval.');
+  }
+  if (automated && candidate.publicationDisposition !== 'PUBLISH') {
+    throw new Error('Only PUBLISH candidates may enter study automatically.');
+  }
+  if (candidate.publicationDisposition === 'REJECT') {
+    throw new Error('Rejected candidates cannot enter a study deck.');
   }
   if (!candidate.segmentId || !candidate.sourceId) {
     throw new Error('This draft has no source segment and cannot become a study card.');

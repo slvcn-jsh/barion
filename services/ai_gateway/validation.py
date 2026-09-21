@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 
 from .errors import GatewayError
-from .models import CardGenerationRequest, GeneratedCardOutput, SourceSegment
+from services.source_span import resolve_source_span
+
+from .models import CandidateEvaluation, CardGenerationRequest, GeneratedCard, GeneratedCardOutput, SourceSegment
 
 
 def validate_grounded_output(
@@ -17,8 +19,21 @@ def validate_grounded_output(
 
     for candidate in output.candidates[: request.maxCandidates]:
         segment = by_id.get(candidate.segmentId)
-        if segment is None or candidate.evidenceText not in segment.text:
+        if segment is None:
             continue
+        span = resolve_source_span(segment.text, candidate.evidenceText)
+        if span.status not in {"exact", "normalized", "context-disambiguated"}:
+            continue
+        candidate = GeneratedCard(**{
+            **candidate.model_dump(exclude={"evidenceSpan", "evaluation"}),
+            "evidenceSpan": span.to_dict(),
+            "evaluation": CandidateEvaluation(
+                evidenceSpanVerified=True, sourceClaimSupported="not_evaluated",
+                citationStatus="exact", medicalRisk="none",
+                medicalVerificationStatus="verification_not_required",
+                publicationDisposition="REVIEW", reasonCodes=["CLAIM_SUPPORT_NOT_EVALUATED"],
+            ),
+        })
         duplicate_key = _normalize(f"{candidate.question}\n{candidate.answer}")
         if duplicate_key in seen:
             continue

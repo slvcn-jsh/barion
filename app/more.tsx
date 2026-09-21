@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppShell } from '@/components/AppShell';
+import { useAuth } from '@/auth';
 import { colors, fonts, radii } from '@/theme/colors';
 
 type ToolItem = {
@@ -67,6 +68,23 @@ const libraryTools: ToolItem[] = [
 ];
 
 export default function MoreScreen() {
+  const { session, signOut } = useAuth();
+
+  function handleSignOut() {
+    Alert.alert(
+      'Sign out',
+      'You will stay in offline mode. Your local cards and review history are safe.',
+      [
+        { style: 'cancel', text: 'Cancel' },
+        {
+          style: 'destructive',
+          text: 'Sign out',
+          onPress: () => { void signOut(); },
+        },
+      ],
+    );
+  }
+
   return (
     <AppShell active="more">
       <ScrollView contentContainerStyle={styles.container}>
@@ -85,6 +103,45 @@ export default function MoreScreen() {
 
         <ToolSection title="Study tools" items={studyTools} />
         <ToolSection title="Library controls" items={libraryTools} />
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account</Text>
+          {session ? (
+            <View style={styles.accountRow}>
+              <View style={styles.accountInfo}>
+                <Ionicons name="person-circle-outline" size={22} color={colors.blueDark} />
+                <Text style={styles.accountEmail} numberOfLines={1}>
+                  {session.user.email ?? 'Signed in'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleSignOut}
+                style={({ pressed }) => [styles.signOutBtn, pressed && styles.pressed]}
+              >
+                <Ionicons name="log-out-outline" size={18} color={colors.coral} />
+                <Text style={styles.signOutText}>Sign out</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/signin')}
+              style={({ pressed }) => [styles.signInCard, pressed && styles.pressed]}
+            >
+              <View style={styles.toolIcon}>
+                <Ionicons name="log-in-outline" size={22} color={colors.blueDark} />
+              </View>
+              <View style={styles.toolCopy}>
+                <Text style={styles.toolTitle}>Sign in for AI card generation</Text>
+                <Text style={styles.toolBody}>
+                  Sign in to unlock Gemini-powered card creation from your notes.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.slate} />
+            </Pressable>
+          )}
+        </View>
       </ScrollView>
     </AppShell>
   );
@@ -124,6 +181,18 @@ function ToolSection({
 }
 
 const styles = StyleSheet.create({
+  accountEmail: { color: colors.ink, flex: 1, fontFamily: fonts.semibold, fontSize: 13 },
+  accountInfo: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 10, minWidth: 0 },
+  accountRow: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
   body: { color: colors.muted, fontFamily: fonts.regular, fontSize: 13, lineHeight: 21 },
   container: { gap: 18, marginHorizontal: 'auto', maxWidth: 980, padding: 18, paddingBottom: 48, width: '100%' },
   eyebrow: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 1.2 },
@@ -133,6 +202,19 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
   section: { gap: 11 },
   sectionTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 19 },
+  signInCard: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.line,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 86,
+    padding: 14,
+  },
+  signOutBtn: { alignItems: 'center', flexDirection: 'row', gap: 6, paddingHorizontal: 4 },
+  signOutText: { color: colors.coral, fontFamily: fonts.bold, fontSize: 13 },
   title: { color: colors.ink, fontFamily: fonts.extraBold, fontSize: 25, lineHeight: 32 },
   toolBody: { color: colors.muted, fontFamily: fonts.regular, fontSize: 12, lineHeight: 18 },
   toolCard: {

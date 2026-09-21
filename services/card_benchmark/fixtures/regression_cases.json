@@ -1,0 +1,19 @@
+{
+  "lithium_sodium": {
+    "concept": "lithium toxicity",
+    "question_keywords": ["lithium"],
+    "answer_forbidden": ["1500", "mg"],
+    "description": "Unsupported numeric intake recommendation"
+  },
+  "disulfiram_timing": {
+    "concept": "disulfiram alcohol",
+    "question_keywords": ["disulfiram", "alcohol"],
+    "answer_forbidden": ["8 hours", "eight hours"],
+    "description": "Unsupported timing recommendation"
+  },
+  "anorexia_contradiction": {
+    "concept": "anorexia nervosa",
+    "question_keywords": ["anorexia"],
+    "description": "Contradictory numeric claim between answer and study note"
+  }
+}

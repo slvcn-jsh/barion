@@ -6,9 +6,12 @@ import type {
   ProviderGenerationResult,
 } from '@/ai/types';
 
+export type GatewayAccessTokenProvider = (forceRefresh?: boolean) => Promise<string | null>;
+
 export function createGatewayCardGenerationProvider(
   config: PublicGatewayConfig,
   fetchImplementation: typeof fetch = fetch,
+  accessTokenProvider?: GatewayAccessTokenProvider,
 ): CardGenerationProvider {
   return {
     id: 'barion-gateway',
@@ -17,15 +20,27 @@ export function createGatewayCardGenerationProvider(
       const abortController = new AbortController();
       const timeout = setTimeout(() => abortController.abort(), config.timeoutMs);
       try {
-        const response = await fetchImplementation(`${config.gatewayUrl}/v1/card-generation`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(config.accessToken ? { Authorization: `Bearer ${config.accessToken}` } : {}),
-          },
-          body: JSON.stringify({ ...request, model: config.model }),
-          signal: abortController.signal,
-        });
+        const body = JSON.stringify({ ...request, model: config.model });
+        const tokenFromProvider = accessTokenProvider ? await accessTokenProvider(false) : null;
+        let accessToken = tokenFromProvider ?? config.accessToken;
+        let response = await sendGatewayRequest(
+          config.gatewayUrl,
+          body,
+          accessToken,
+          abortController.signal,
+          fetchImplementation,
+        );
+        if (response.status === 401 && accessTokenProvider) {
+          const refreshed = await accessTokenProvider(true);
+          accessToken = refreshed ?? config.accessToken;
+          response = await sendGatewayRequest(
+            config.gatewayUrl,
+            body,
+            accessToken,
+            abortController.signal,
+            fetchImplementation,
+          );
+        }
         if (!response.ok) throw httpError(response.status, config.model);
 
         let payload: unknown;
@@ -64,6 +79,24 @@ export function createGatewayCardGenerationProvider(
       }
     },
   };
+}
+
+function sendGatewayRequest(
+  gatewayUrl: string,
+  body: string,
+  accessToken: string | null | undefined,
+  signal: AbortSignal,
+  fetchImplementation: typeof fetch,
+) {
+  return fetchImplementation(`${gatewayUrl}/v1/card-generation`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
+    body,
+    signal,
+  });
 }
 
 function invalidResponse(modelId: string) {

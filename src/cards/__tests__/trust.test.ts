@@ -34,4 +34,12 @@ describe('cardTrustSummary', () => {
       }).label,
     ).toBe('Needs source check');
   });
+
+  it('does not treat gateway evidence coordinates as claim verification', () => {
+    expect(cardTrustSummary({
+      status: 'needs_review',
+      evidence: { sourceTitle: 'Source', locator: 'Page 1', text: 'Evidence', supportScore: 1,
+        verificationStatus: 'gateway-evidence-span-verified' },
+    }).label).toBe('Needs source check');
+  });
 });

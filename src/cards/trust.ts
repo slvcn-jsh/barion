@@ -48,5 +48,6 @@ export function cardTrustSummary(card: TrustInput): TrustSummary {
 }
 
 export function needsSourceReview(evidence?: EvidenceSnippet) {
-  return evidence?.verificationStatus === 'needs-source-review';
+  return evidence?.verificationStatus === 'needs-source-review'
+    || evidence?.verificationStatus === 'gateway-evidence-span-verified';
 }

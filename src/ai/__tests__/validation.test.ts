@@ -9,8 +9,8 @@ const segments: SourceContext[] = [{
 }];
 
 describe('parseGroundedCardResponse', () => {
-  it('accepts canonical cards and derives locator from trusted source context', () => {
-    const result = parseGroundedCardResponse({
+  it('accepts canonical cards and derives locator from trusted source context', async () => {
+    const result = await parseGroundedCardResponse({
       candidates: [{
         segmentId: 'segment-1',
         cardType: 'mechanism',
@@ -24,8 +24,8 @@ describe('parseGroundedCardResponse', () => {
     expect(result).toEqual([expect.objectContaining({ segmentId: 'segment-1', locator: 'Page 4' })]);
   });
 
-  it('rejects evidence not present verbatim in referenced segment', () => {
-    expect(() => parseGroundedCardResponse({
+  it('rejects evidence not present in referenced segment', async () => {
+    await expect(parseGroundedCardResponse({
       candidates: [{
         segmentId: 'segment-1',
         cardType: 'mechanism',
@@ -34,10 +34,10 @@ describe('parseGroundedCardResponse', () => {
         answer: 'It cures diabetes.',
         evidenceText: 'Metformin cures diabetes.',
       }],
-    }, segments, 3)).toThrow(AIResponseValidationError);
+    }, segments, 3)).rejects.toThrow(AIResponseValidationError);
   });
 
-  it('rejects unknown segments and excess candidates', () => {
+  it('rejects unknown segments and excess candidates', async () => {
     const candidate = {
       segmentId: 'unknown',
       cardType: 'mechanism',
@@ -47,7 +47,7 @@ describe('parseGroundedCardResponse', () => {
       evidenceText: 'Metformin reduces hepatic glucose production',
     };
 
-    expect(() => parseGroundedCardResponse({ candidates: [candidate, candidate] }, segments, 1))
-      .toThrow(AIResponseValidationError);
+    await expect(parseGroundedCardResponse({ candidates: [candidate, candidate] }, segments, 1))
+      .rejects.toThrow(AIResponseValidationError);
   });
 });
