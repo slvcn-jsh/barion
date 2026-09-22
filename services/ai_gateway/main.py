@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 
 from pathlib import Path
 
+from services.card_evaluation.adapters.dailymed import DailyMedAdapter
+from services.card_evaluation.verification import VerificationCoordinator
+
 # Load environment variables from .env file in same directory as this file
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -28,6 +31,7 @@ from .orchestration import GenerationOrchestrator
 from .providers.gemini import GeminiGenerationProvider
 from .security import (
     GatewayAuthenticator,
+    GatewayIdentity,
     InMemoryRateLimiter,
     StaticTokenAuthenticator,
     SupabaseJWTAuthenticator,
@@ -44,6 +48,7 @@ def create_app(
     resolved_settings = settings or GatewaySettings.from_env()
     resolved_authenticator = authenticator or _create_authenticator(resolved_settings)
     provider = None
+    authority_adapter = None
     if orchestrator is None and resolved_settings.gemini_api_key:
         provider = GeminiGenerationProvider(
             resolved_settings.gemini_api_key,
@@ -53,13 +58,19 @@ def create_app(
             retry_base_delay_seconds=resolved_settings.provider_retry_base_delay_seconds,
             retry_max_delay_seconds=resolved_settings.provider_retry_max_delay_seconds,
         )
-        orchestrator = GenerationOrchestrator(provider)
+        authority_adapter = DailyMedAdapter()
+        orchestrator = GenerationOrchestrator(
+            provider,
+            verifier=VerificationCoordinator([authority_adapter]),
+        )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
         if provider:
             await provider.close()
+        if authority_adapter:
+            authority_adapter.close()
 
     app = FastAPI(title="Barion AI Gateway", version="1.0.0", lifespan=lifespan)
     app.state.settings = resolved_settings
@@ -123,11 +134,11 @@ def create_app(
             raise GatewayError("provider_unavailable", "Generation provider is not configured.", 503, True)
         return await app.state.orchestrator.generate_cards(request)
 
-    @app.post("/v1/bari/chat", response_model=BariChatResponse, dependencies=[Depends(auth)])
-    async def bari_chat(request: BariChatRequest) -> BariChatResponse:
+    @app.post("/v1/bari/chat", response_model=BariChatResponse)
+    async def bari_chat(request: BariChatRequest, identity: GatewayIdentity = Depends(auth)) -> BariChatResponse:
         if app.state.orchestrator is None:
             raise GatewayError("provider_unavailable", "Chat provider is not configured.", 503, True)
-        return await app.state.orchestrator.bari_chat(request)
+        return await app.state.orchestrator.bari_chat(request, identity.subject)
 
     return app
 

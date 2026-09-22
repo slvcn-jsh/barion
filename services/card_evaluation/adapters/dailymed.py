@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib, json, re
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 from ..models import RiskRoute, SourceVerificationContext, VerificationResult
@@ -16,10 +17,12 @@ class DailyMedAdapter:
     authority_type = "official_drug_label"
     authority_name = "NIH National Library of Medicine DailyMed"
 
-    def __init__(self, client: AllowlistedHttpClient | None = None, now=lambda: datetime.now(timezone.utc)) -> None:
+    def __init__(self, client: AllowlistedHttpClient | None = None, now=lambda: datetime.now(timezone.utc),
+                 clock=monotonic) -> None:
         self.client = client or AllowlistedHttpClient((_HOST,))
         self._owns_client = client is None
         self._now = now
+        self._clock = clock
 
     def close(self) -> None:
         if self._owns_client: self.client.close()
@@ -32,19 +35,23 @@ class DailyMedAdapter:
         }
 
     def verify_claim(self, claim_id: str, claim: str, route: RiskRoute,
-                     context: SourceVerificationContext, cache_key: str) -> VerificationResult:
+                     context: SourceVerificationContext, cache_key: str,
+                     *, deadline: float | None = None) -> VerificationResult:
         retrieved = self._now()
         try:
             query = quote(context.authorityQuery.strip(), safe="")
             search_url = f"https://{_HOST}/dailymed/services/v2/spls.json?drug_name={query}&pagesize=20"
-            search = json.loads(self.client.get(search_url).decode("utf-8"))
+            search = json.loads(self.client.get(search_url, timeout_seconds=self._remaining(deadline)).decode("utf-8"))
             candidates = [item for item in search.get("data", []) if isinstance(item, dict)]
             if not candidates:
                 return self._unavailable(claim_id, claim, route, context, cache_key, "No matching official label was found.")
             label = candidates[0]
             set_id = str(label["setid"])
             label_url = f"https://{_HOST}/dailymed/services/v2/spls/{quote(set_id, safe='')}.xml"
-            location, evidence, score = _best_evidence(claim, _sections(ET.fromstring(self.client.get(label_url))))
+            location, evidence, score = _best_evidence(
+                claim,
+                _sections(ET.fromstring(self.client.get(label_url, timeout_seconds=self._remaining(deadline)))),
+            )
             if not evidence:
                 return self._unavailable(claim_id, claim, route, context, cache_key, "Official label contained no comparable text.")
             status, confidence, reason = _compare(claim, evidence)
@@ -64,6 +71,14 @@ class DailyMedAdapter:
             )
         except (SecureRetrievalError, ValueError, KeyError, TypeError, ET.ParseError, UnicodeDecodeError):
             return self._unavailable(claim_id, claim, route, context, cache_key, "Official authority was unavailable or malformed.")
+
+    def _remaining(self, deadline: float | None) -> float | None:
+        if deadline is None:
+            return None
+        remaining = deadline - self._clock()
+        if remaining <= 0:
+            raise SecureRetrievalError("Authority request budget exhausted.")
+        return remaining
 
     def _unavailable(self, claim_id, claim, route, context, cache_key, reason):
         return VerificationResult(

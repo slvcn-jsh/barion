@@ -12,6 +12,7 @@ import { asBarionAIError } from '@/ai/errors';
 import { createGatewayCardGenerationProvider } from '@/ai/gatewayProvider';
 import { createSupabaseAccessTokenProvider } from '@/auth/sessionProvider';
 import { generateGroundedCardsWithFallback } from '@/ai/generate';
+import { isAutoStudyEligible, type PublicationDisposition } from '@/ai/publicationPolicy';
 import type { GroundedCardCandidate } from '@/ai/types';
 import { createId, nowIso } from '@/domain/ids';
 import {
@@ -1817,14 +1818,26 @@ export async function generateDraftsForSource(sourceId: string) {
       const qualityNotes = localGeneration
         ? draftQualityNotes(draft)
         : describeGatewayCardQuality(draft, qualityScore);
-      if (draft.evaluation?.publicationDisposition === 'PUBLISH'
+      if (draft.evaluation && isAutoStudyEligible(draft.evaluation.publicationDisposition)
           && shouldAutoPublishCandidate(qualityScore, localGeneration, AUTO_PUBLISH_QUALITY_SCORE)) {
         candidateIds.push(candidateId);
       }
+      const originalCandidate = draft.evaluation?.originalCandidate ?? {
+        segmentId: draft.segmentId,
+        locator: draft.locator,
+        cardType: draft.cardType,
+        question: draft.question,
+        answer: draft.answer,
+        learningObjective: draft.learningObjective,
+        evidenceText: draft.evidenceText,
+        evidenceSpan: draft.evidenceSpan,
+      };
+      const verificationStatus = candidateVerificationStatus(draft, localGeneration);
+      const supportScore = candidateSupportScore(draft);
       await txn.runAsync(
         `INSERT INTO generated_candidates
-         (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, evidence_span_json, evaluation_json, original_candidate_json, publication_disposition, evaluation_version, policy_version, verification_status, support_score, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, evidence_span_json, evaluation_json, original_candidate_json, publication_disposition, evaluation_version, policy_version, sanitization_reason, verification_status, support_score, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         candidateId,
         jobId,
         draft.segmentId,
@@ -1838,14 +1851,13 @@ export async function generateDraftsForSource(sourceId: string) {
         draft.locator,
         draft.evidenceSpan ? JSON.stringify(draft.evidenceSpan) : null,
         draft.evaluation ? JSON.stringify(draft.evaluation) : null,
-        JSON.stringify({ question: draft.question, answer: draft.answer, evidenceText: draft.evidenceText }),
+        JSON.stringify(originalCandidate),
         draft.evaluation?.publicationDisposition ?? 'REVIEW',
         draft.evaluation?.evaluationVersion ?? 'legacy',
         draft.evaluation?.policyVersion ?? 'legacy',
-        draft.evidenceSpan && ['exact', 'normalized', 'context-disambiguated'].includes(draft.evidenceSpan.status)
-          ? localGeneration ? 'extractive-source-match' : 'gateway-evidence-span-verified'
-          : 'needs-source-review',
-        1,
+        draft.evaluation?.sanitization?.reason ?? null,
+        verificationStatus,
+        supportScore,
         'pending',
         now,
       );
@@ -1900,6 +1912,20 @@ function draftQualityNotes(draft: GroundedCardCandidate) {
   return describeGatewayCardQuality(draft, score);
 }
 
+function candidateVerificationStatus(draft: GroundedCardCandidate, localGeneration: boolean) {
+  if (!draft.evidenceSpan || !['exact', 'normalized', 'context-disambiguated'].includes(draft.evidenceSpan.status)) {
+    return 'needs-source-review';
+  }
+  if (localGeneration) return 'extractive-source-match';
+  return draft.evaluation?.medicalVerificationStatus ?? 'gateway-evidence-span-verified';
+}
+
+function candidateSupportScore(draft: GroundedCardCandidate) {
+  if (draft.evaluation?.sourceClaimSupported === 'supported') return 1;
+  if (draft.evaluation?.sourceClaimSupported === 'uncertain') return 0.5;
+  return 0;
+}
+
 export async function approveCandidate(candidateId: string, deckId?: string, automated = false) {
   const db = await getDatabase();
   const candidate = await db.getFirstAsync<{
@@ -1949,7 +1975,7 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
   if (!candidate || candidate.status !== 'pending') {
     throw new Error('This draft is no longer available for approval.');
   }
-  if (automated && candidate.publicationDisposition !== 'PUBLISH') {
+  if (automated && !isAutoStudyEligible(candidate.publicationDisposition as PublicationDisposition)) {
     throw new Error('Only PUBLISH candidates may enter study automatically.');
   }
   if (candidate.publicationDisposition === 'REJECT') {
@@ -1969,14 +1995,15 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
   const cardId = createId('card');
   let resolvedCardId = cardId;
   const fsrsCardJson = createInitialFsrsCard(new Date(now));
-  const approvedCardStatus =
-    candidate.verificationStatus === 'extractive-source-match'
-      ? automated ? 'source_extracted' : 'verified'
-      : 'needs_review';
-  const approvedEvidenceStatus =
-    candidate.verificationStatus === 'extractive-source-match'
+  const policyPublished = isAutoStudyEligible(candidate.publicationDisposition as PublicationDisposition);
+  const approvedCardStatus = policyPublished
+    ? candidate.verificationStatus === 'extractive-source-match' && automated ? 'source_extracted' : 'verified'
+    : 'needs_review';
+  const approvedEvidenceStatus = policyPublished
+    ? candidate.verificationStatus === 'extractive-source-match'
       ? automated ? 'auto-published-extractive' : 'user-approved-extractive'
-      : 'user-approved-edited';
+      : 'policy-published'
+    : 'user-approved-held-candidate';
 
   await runWriteTransaction(db, async (txn) => {
     const existingCard = await txn.getFirstAsync<{ id: string; noteId: string; deletedAt: string | null }>(
@@ -2180,8 +2207,13 @@ export async function updateCandidateDraft(candidateId: string, question: string
   const result = await db.runAsync(
     `UPDATE generated_candidates
      SET question = ?,
-         answer = ?,
-         verification_status = 'user-edited',
+          answer = ?,
+          evaluation_json = NULL,
+          publication_disposition = 'REVIEW',
+          evaluation_version = 'user-edited',
+          policy_version = 'manual-review-required',
+          sanitization_reason = NULL,
+          verification_status = 'user-edited',
          support_score = 0,
          quality_score = 0,
          quality_notes = 'Edited draft: review source evidence before publishing.'

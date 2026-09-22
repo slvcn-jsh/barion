@@ -55,7 +55,7 @@ Gemini calls retry bounded transient failures: HTTP 429/500/502/503/504, timeout
 ## API
 
 - `GET /v1/health`: dependency status without credentials.
-- `POST /v1/card-generation`: authenticated structured generation; gateway revalidates segment IDs, verbatim evidence, quantity contract, limits, and duplicates.
+- `POST /v1/card-generation`: authenticated structured generation; gateway derives trusted spans, extracts atomic claims, grounds them against supplied source segments, routes selective medical verification, applies PUBLISH/SANITIZE/REVIEW/REJECT policy, and returns claim-level evaluation metadata. Sanitized candidates are fully reevaluated before publication.
 - `POST /v1/bari/chat`: authenticated source-strict foundation. AI chat generation intentionally deferred to Bari sprint.
 
 All retrieved document content remains reference data. Prompt instructions from source material must not be executed. Logs include metadata only, never prompts or source text.

@@ -82,6 +82,33 @@ class FailingProvider:
         raise self.error
 
 
+class StaticCardProvider:
+    id = "fake"
+    model = "test-model"
+
+    def __init__(self, card: GeneratedCard):
+        self.card = card
+
+    async def generate_cards(self, _request):
+        return ProviderResult(
+            request_id="provider-static",
+            output=GeneratedCardOutput(candidates=[self.card]),
+            usage=ProviderUsage(inputTokens=12, outputTokens=8),
+        )
+
+    async def bari_chat(self, _request, _history):
+        return BariChatResult(request_id="chat-static", message="Not used.")
+
+
+class RecordingChatProvider(FakeProvider):
+    def __init__(self):
+        self.histories = []
+
+    async def bari_chat(self, request, conversation_history):
+        self.histories.append((request.message, list(conversation_history)))
+        return await super().bari_chat(request, conversation_history)
+
+
 def settings(**changes):
     values = {
         "auth_mode": "static",
@@ -481,6 +508,20 @@ def test_bari_chat_with_conversation_id():
     assert isinstance(data2["message"], str)
 
 
+def test_bari_conversation_history_is_scoped_to_identity():
+    async def run():
+        provider = RecordingChatProvider()
+        orchestrator = GenerationOrchestrator(provider)
+        first = BariChatRequest(conversationId="shared", message="First user message", mode="source-strict")
+        second = BariChatRequest(conversationId="shared", message="Second user message", mode="source-strict")
+        await orchestrator.bari_chat(first, "user-a")
+        await orchestrator.bari_chat(second, "user-b")
+        assert provider.histories[0][1] == []
+        assert provider.histories[1][1] == []
+
+    asyncio.run(run())
+
+
 def test_bari_chat_requires_authentication():
     app = create_app(settings(), GenerationOrchestrator(FakeProvider()))
     client = TestClient(app, raise_server_exceptions=False)
@@ -771,6 +812,18 @@ def test_orchestrator_rejects_validated_underproduction():
     assert response.json()["error"]["code"] == "insufficient_candidates"
 
 
+def test_orchestrator_accepts_valid_small_deck_when_minimum_is_one():
+    body = {**request_body(), "minCandidates": 1, "maxCandidates": 56}
+    client = TestClient(create_app(settings(), GenerationOrchestrator(FakeProvider())))
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["output"]["candidates"]) == 1
+
+
 def test_generation_request_defaults_to_legacy_single_candidate_minimum():
     request = CardGenerationRequest.model_validate(request_body())
     assert request.minCandidates == 1
@@ -830,3 +883,60 @@ def test_gateway_derives_span_and_ignores_legacy_missing_offsets():
     assert span["startOffset"] == 0
     assert span["endOffset"] == len("Metformin reduces hepatic glucose production.")
     assert len(span["evidenceTextSha256"]) == len(span["sourceTextSha256"]) == 64
+    evaluation = response.json()["output"]["candidates"][0]["evaluation"]
+    assert evaluation["evaluationVersion"] == "2.0.0"
+    assert evaluation["policyVersion"] == "3.1.0"
+    assert evaluation["sourceSpan"] == span
+    assert evaluation["sourceClaimSupported"] == "supported"
+    assert evaluation["publicationDisposition"] == "PUBLISH"
+    assert evaluation["claimResults"][0]["sourceSupport"] == "supported_by_citation"
+
+
+def test_gateway_sanitizes_optional_unsupported_content_then_reevaluates():
+    provider = StaticCardProvider(GeneratedCard(
+        segmentId="segment-1",
+        cardType="mechanism",
+        learningObjective="Recall metformin action.",
+        question="What does metformin do?",
+        answer=(
+            "Answer: Metformin reduces hepatic glucose production.\n"
+            "Why it matters: Metformin cures every disease."
+        ),
+        evidenceText="Metformin reduces hepatic glucose production.",
+    ))
+    client = TestClient(create_app(settings(), GenerationOrchestrator(provider)))
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=request_body(),
+    )
+    assert response.status_code == 200
+    card = response.json()["output"]["candidates"][0]
+    assert "cures every disease" not in card["answer"]
+    assert card["evaluation"]["publicationDisposition"] == "PUBLISH"
+    assert card["evaluation"]["sanitization"]["initialDisposition"] == "SANITIZE"
+    assert card["evaluation"]["sanitization"]["reevaluated"] is True
+    assert "cures every disease" in card["evaluation"]["originalCandidate"]["answer"]
+
+
+def test_gateway_holds_high_risk_claim_when_authority_is_unavailable():
+    text = "Lithium dose is 300 mg."
+    body = request_body()
+    body["userPrompt"] = json.dumps({
+        "segments": [{"segmentId": "segment-1", "locator": "Page 1", "sectionPath": "Dose", "text": text}]
+    })
+    provider = StaticCardProvider(GeneratedCard(
+        segmentId="segment-1", cardType="dose", learningObjective="Recall lithium dose.",
+        question="What is the lithium dose?", answer=f"Answer: {text}", evidenceText=text,
+    ))
+    client = TestClient(create_app(settings(), GenerationOrchestrator(provider)))
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=body,
+    )
+    assert response.status_code == 200
+    evaluation = response.json()["output"]["candidates"][0]["evaluation"]
+    assert evaluation["medicalVerificationStatus"] == "authority_unavailable"
+    assert evaluation["publicationDisposition"] == "REVIEW"
+    assert "HIGH_RISK_UNVERIFIED" in evaluation["reasonCodes"]

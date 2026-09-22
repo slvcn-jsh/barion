@@ -12,7 +12,7 @@ Barion is an offline-first medical and health-science study app. It imports lear
 - **Generation:** client uses authenticated FastAPI gateway through provider abstraction, then falls back to deterministic local extractive drafts on configuration, auth, network, provider, quantity, or validation failure.
 - **Gateway:** `services/ai_gateway/`; static bearer auth locally, Supabase asymmetric JWT/JWKS in production, current adapter Gemini. Structured output, prompt-injection boundaries, limits, rate limiting, retries, and sanitized diagnostics exist.
 - **Provenance:** cross-language `source-span/1.0.0`: SHA-256, UTF-16 code-unit offsets, half-open ranges. Provider offsets are untrusted; gateway/client derive spans from trusted segments.
-- **Evaluation:** `services/card_benchmark/` handles structural extraction, source-only concept inventory, claim decomposition, grounding, citations, risk/verification integration, pedagogy, and policy. `services/card_evaluation/` owns reusable risk, authority verification, secure retrieval/cache, and policy. TypeScript mirrors production contracts.
+- **Evaluation:** `services/card_evaluation/` now owns reusable normalization, atomic claim extraction, grounding, contradiction validation, risk/verification integration, sanitization, and publication policy. `services/card_benchmark/` consumes that production core while retaining structural extraction, concept inventory, experiments, pedagogy scoring, and reporting. TypeScript independently revalidates production contracts.
 - **Study:** approved/manual cards share local card/evidence path. `ts-fsrs` drives review; review events are append-only, memory state is recalculated cache, non-recall modes stay separate from durable FSRS.
 - **Offline:** SQLite study/review works offline. Remote generation failure uses local extraction. Authority checks may use valid cache; required high-risk checks without cache remain held.
 
@@ -22,10 +22,10 @@ Barion is an offline-first medical and health-science study app. It imports lear
 2. **WORKING:** PDF/text extraction -> page locators -> segmentation -> source segments and study guide.
 3. **WORKING:** `generateDraftsForSource()` -> gateway/session token -> Gemini structured generation and deterministic validation; any failure -> local extractive candidates.
 4. **WORKING:** trusted evidence-span resolution -> candidate/provenance/evaluation persistence -> review UI.
-5. **PARTIAL:** gateway candidates are span-verified, but semantic claim grounding is absent from gateway request path; they intentionally receive `REVIEW`. Exact local extractive candidates can receive `PUBLISH` and pass quality threshold.
-6. **PARTIAL:** claim/risk/external-verification/publication stack exists and is benchmark-tested, but is not wired end-to-end into gateway persistence.
+5. **WORKING:** gateway candidates receive trusted span resolution, atomic claim extraction, semantic source grounding, contradiction checks, selective risk/authority routing, sanitization with full reevaluation, and deterministic PUBLISH/SANITIZE/REVIEW/REJECT policy.
+6. **WORKING:** mobile revalidates evaluation metadata, persists original/sanitized payloads and policy results transactionally, auto-publishes only final PUBLISH candidates, and keeps REVIEW/REJECT/unresolved candidates outside normal study.
 7. **WORKING:** approval/manual creation -> cards/evidence/initial FSRS -> offline study, testing, review, undo, calendar, backup.
-8. **NOT YET INTEGRATED:** production authority routing/external verification in deployed flow; live mobile upload-to-offline-study E2E; production monitoring/deployment.
+8. **PARTIAL:** production authority routing is integrated with DailyMed and fails closed when unsupported/unavailable; authority breadth, durable deployment cache composition, live mobile upload-to-offline-study E2E, and production monitoring/deployment remain open.
 
 ## 4. IMPLEMENTED FEATURES
 
@@ -43,21 +43,21 @@ Barion is an offline-first medical and health-science study app. It imports lear
 - Evidence-span derivation and local extractive fallback without AI.
 
 ### Evaluation, benchmarking, safety
-- Atomic claims, grounding/citation/numeric/contradiction checks, selective risk routing, secure DailyMed adapter, cache, pedagogy rubric, and PUBLISH/SANITIZE/REVIEW/REJECT policy.
+- Atomic claims, grounding/citation/numeric/contradiction checks, selective risk routing, secure DailyMed adapter, cache, gateway integration, and PUBLISH/SANITIZE/REVIEW/REJECT policy.
 - Sanitization preserves original, removes optional unsupported fields only, and requires reevaluation.
 - Governed fixtures, structural extraction, frozen inventories, weighted coverage, semantic matching, blind review, SOL evaluator contract, immutable hash-linked runs, reproducible splits, costs, and optimization gates.
 
-## 5. CURRENT CLINE SESSION
+## 5. CURRENT CODEX SESSION
 
-**Goal:** restore interrupted AI/card-benchmark work to valid, fully tested state, then prepare Codex handoff without new feature work.
+**Goal:** complete Workstream A by connecting reusable claim evaluation, medical-risk routing, selective authority verification, sanitization, and publication policy to production gateway/mobile persistence.
 
-**Implementation:** fixed malformed braces in `src/ai/evaluation.ts`; replaced undefined `input()` with explicit prompt-injection fixture in `src/ai/__tests__/prompts.test.ts`; restored eight valid 64-character SHA-256-formatted values in `services/card_benchmark/fixtures/dataset_registry.json`; added this handoff; changed machine-specific source-span documentation path to repository-relative form; expanded ignore rules for `tmp/`, Python virtual environments, and pytest caches.
+**Implementation:** production gateway now evaluates every remote candidate after trusted span resolution; shared evaluator owns claims, grounding, contradictions, risk, verification, policy, sanitization, and reevaluation; mobile independently validates evaluation envelopes, persists original/sanitized provenance, auto-publishes only PUBLISH candidates, and explains held claims in review UI.
 
-**Decisions:** no paid calls, live authority calls, generated benchmark edits, scope expansion, broad cleanup, destructive deletion, or blind staging. Existing generated runs remain untouched.
+**Decisions:** production reuses benchmark-proven evaluation primitives without depending on benchmark experiment/reporting infrastructure. No paid provider calls, model changes, schema migration, immutable benchmark edits, or unrelated Workstream H configuration fixes.
 
-**Validation:** 259 tests pass across Jest, benchmark/evaluation pytest, and gateway pytest; TypeScript passes. Commands appear in section 14.
+**Validation:** 280 tests pass across Jest, benchmark/evaluation pytest, and gateway pytest; TypeScript passes. One pre-existing Expo environment inlining isolation test remains failing. Commands appear in section 14.
 
-**Remaining:** broad worktree contains intentional multi-phase work predating this repair. It is not clean and was not committed. Native/device E2E and production deployment remain unverified.
+**Remaining:** native SQLite/device upload-to-offline-study E2E, durable deployment authority cache composition, broader authority coverage, and production deployment remain unverified. Workstream H owns deterministic Expo environment isolation.
 
 ## 6. IMPORTANT ARCHITECTURAL DECISIONS
 
@@ -107,7 +107,7 @@ Barion is an offline-first medical and health-science study app. It imports lear
 - Auth: local static bearer or Supabase RS256/ES256 JWT/JWKS. Client retries one 401 after forced session refresh. Refresh tokens never reach gateway.
 - Provider retries: default 4 total attempts for 429/500/502/503/504, timeout, and transport errors; full-jitter exponential delay capped at 16 seconds by default; bounded server retry hints. Auth/invalid requests are not retried.
 - Gateway defaults: 300,000 request bytes, 180,000 input characters, 1–100 candidates. Gemini uses low thinking and 32,768 combined thinking/output tokens.
-- Structured output is strict; segment IDs, evidence, quantity, and duplicates are revalidated. Gateway candidates stay `REVIEW` because claim support is not evaluated.
+- Structured output is strict; segment IDs, spans, evaluation envelopes, quantity, and duplicates are revalidated. Gateway dispositions now reflect semantic claim evaluation; only final PUBLISH candidates enter normal study automatically.
 - Benchmark defaults: 4 initial batches, 6 logical requests, 100k input/20k output token ceilings; deterministic balanced plan, per-batch cache, recoverable continuation, resume, append-only budget expansion, minimum 45 unique cards and target 56.
 - Deterministic: schema/span/duplicate/quantity checks, local fallback, benchmark grounding/policy. Model-driven: candidate wording and optional SOL pedagogy evaluation.
 
@@ -160,9 +160,9 @@ Supported by canonical local artifacts only:
 Run against final product-code state before handoff-only documentation/ignore changes:
 
 - `npm run typecheck` — pass.
-- `npm test -- --runInBand` — 16 suites, 122 tests passed.
-- `python -m pytest services/card_evaluation/tests services/card_benchmark/tests -q` — 94 passed.
-- `python -m pytest services/ai_gateway/tests -q` — 43 passed.
+- `npm test -- --runInBand` equivalent direct Jest run — 25 suites passed, 132 tests passed; one known configuration-isolation test failed.
+- `python -m pytest services/card_evaluation/tests services/card_benchmark/tests -q` — 102 passed.
+- `python -m pytest services/ai_gateway/tests -q` — 46 passed.
 
 Final checks after handoff/hygiene edits:
 
@@ -170,11 +170,11 @@ Final checks after handoff/hygiene edits:
 - `git diff --check` — pass.
 - Full handoff re-read/repository cross-check — complete.
 
-Total executed tests: **259 passed**.
+Total executed tests: **280 passed, 1 known failure**.
 
 ### FAILING
 
-- None in executed suites.
+- `src/ai/__tests__/config.test.ts` — Expo statically inlined public environment values prevent runtime deletion from isolating optional gateway configuration. Existing Workstream H defect; unrelated to Workstream A.
 
 ### NOT RUN
 
@@ -185,7 +185,7 @@ Total executed tests: **259 passed**.
 
 ## 15. KNOWN BUGS / LIMITATIONS / TECHNICAL DEBT
 
-- Semantic claim evaluation and production authority routing are not wired into gateway-to-SQLite flow; remote cards remain `REVIEW`.
+- Production authority coverage is currently DailyMed-focused. Claims requiring an unsupported authority category or unavailable authority remain `REVIEW`.
 - Gateway rate limiter is process-local; multi-instance deployment needs shared atomic storage and edge controls.
 - Production deployment, TLS/edge policy, monitoring, penetration test remain open.
 - Native PDFs need ingestion service; scanned PDFs need unimplemented OCR.
@@ -194,17 +194,16 @@ Total executed tests: **259 passed**.
 - Canonical comparison has five shared concepts and no independent human review. Coverage is low and critical coverage zero.
 - Dataset registry values satisfy 64-character hash format; source fixture bytes are absent, so they cannot be independently recomputed here.
 - Older completion/setup docs contain stale counts, placeholders, and machine-specific `cd` examples. They are non-authoritative.
-- Worktree contains large preexisting multi-phase modified/untracked implementation. No safe clean commit boundary was assumed.
+- Worktree contains uncommitted Workstream A production-evaluation integration only; no commit was created during implementation.
 
 ## 16. GIT STATE
 
-- Branch: `master`, 3 commits ahead of `origin/master`.
-- HEAD: `23a71da5d02ad89e4a9ccfabf889878de3868f56` (`feat: enforce minCandidates; add segment-based grounding audit`).
-- Recent relevant commits: `5b3cd45 test(ai): verify resilient local fallback provenance`; `1be316e feat(ai): add grounded Gemini gateway`; remote baseline `1fb6184 checkpoint: working Barion version before Cline integration`.
-- Working tree: **not clean**. Before final handoff edits: 37 modified tracked paths and 97 untracked status entries; most represent prior multi-phase work. Handoff/hygiene paths add to this state.
+- Branch: `master`.
+- HEAD: `b7b9bebb16cf4fbaf8e3f77e1ec386605f932236` (accepted transition checkpoint).
+- Working tree: **not clean**. Current changes are Workstream A evaluator, gateway, TypeScript contract, persistence, review UX, deterministic tests, and documentation.
 - Staged files: none. No commit created.
-- Modified groups: env/ignore/agent rules; app auth/source-review UI; package/Jest; gateway; benchmark integration; client AI; trust/domain/ingestion/storage.
-- Untracked intended groups: CI workflow, auth/sign-in, client AI evaluation/span tests, gateway tests/retrieval, benchmark/evaluation implementations/fixtures, architecture/deployment docs, handoff.
+- Modified groups: source-review UI; gateway models/orchestration/validation; benchmark compatibility exports; shared evaluation policy/models; TypeScript evaluation/validation/policy; candidate persistence; tests/docs.
+- Untracked intended groups: shared evaluation implementation/fixtures/tests, gateway contract test, and mocked production evaluation flow test.
 - Ignored local-only items: root `.env`, `output/`, `dist/`, `.expo/`, `tmp/`, `services/ai_gateway/venv/`, `__pycache__`, `.pytest_cache`, `node_modules/`. Never stage them. Generated benchmark runs remain under ignored `tmp/card-benchmark/`.
 
 ## 17. AUTHORITATIVE SPECIFICATIONS
@@ -238,21 +237,21 @@ Older testing/setup/completion/telemetry notes may help historically but contain
 
 ## 19. NEXT RECOMMENDED IMPLEMENTATION TASK
 
-**Objective:** review and checkpoint current multi-phase work into a coherent Git commit, without product changes.
+**Objective:** after Workstream A review/acceptance, begin Workstream B generation reliability and completeness.
 
-**Why next:** implementation and focused validation are green, but repository remains heavily modified/untracked. Codex needs a durable baseline before development; blind staging risks local environments, caches, generated evidence, stale docs, or unrelated assets.
+**Why next:** production safety decisions now run end to end. Highest remaining production risk is rigid one-shot generation (`target=56`, `minimum=45`) that can discard recoverable partial progress or misrepresent completeness.
 
-**Expected scope:** classify all modified/untracked paths by subsystem; reconcile intended source/tests/docs/config versus local/generated/stale material; reconcile `.env.example` Supabase variable naming; scan secrets; stage only intended files; inspect staged diff; rerun fast CI gates; commit with transition checkpoint message. Never alter immutable benchmark runs.
+**Expected scope:** reuse benchmark-proven batching/continuation primitives for bounded batches, stable IDs, persisted checkpoints, duplicate-safe merge, explicit completion states, and concept-aware gap continuation. Do not clone benchmark reporting infrastructure into production.
 
-**Required validation:** `python -m pytest services/card_evaluation/tests services/card_benchmark/tests services/ai_gateway/tests -q`, `npm run typecheck`, `npm test -- --runInBand`, `python -m compileall -q services`, `git diff --cached --check`, secret/path scan, final status/staged diff.
+**Required validation:** gateway/provider retry and partial-success tests, checkpoint/resume tests, duplicate-safe persistence tests, mocked interrupted-generation E2E, TypeScript tests/typecheck, Python compile checks, and `git diff --check`.
 
 ## 20. CODEX TRANSITION NOTES
 
-- Start from dirty worktree; do not reset, clean, or assume untracked means disposable. Much implementation exists only as untracked files.
+- Start from uncommitted Workstream A worktree; do not reset, clean, or assume untracked evaluation files are disposable.
 - `tmp/` and `services/ai_gateway/venv/` are intentionally ignored; generated runs still exist locally as evidence, not commit inputs.
-- No transition commit exists. First Codex task is checkpoint review only; do not begin another feature first.
-- Canonical artifacts reference dirty HEAD `23a71da...`; preserve hashes/immutability. Never fix reports in place.
-- Production app holds model cards at `REVIEW`; benchmark sophistication is not deployed end-to-end integration.
+- Transition checkpoint is `b7b9bebb...`; Workstream A changes remain uncommitted pending review.
+- Immutable benchmark runs remain untouched. Never fix generated reports in place.
+- Production app deploys shared evaluator logic end to end; remaining generation completeness, concept targeting, native offline validation, and authority breadth are separate follow-up workstreams.
 - `.env.example` uses `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, while `src/auth/supabaseClient.ts` reads `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Resolve deliberately during checkpoint review; never expose real values.
 
 

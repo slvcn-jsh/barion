@@ -119,7 +119,7 @@ class BM25Retriever:
         scored_docs.sort(key=lambda x: x[1], reverse=True)
         
         # Return top-k segments
-        top_doc_ids = [doc_id for doc_id, _ in scored_docs[:max_segments]]
+        top_doc_ids = [doc_id for doc_id, score in scored_docs if score > 0][:max_segments]
         return [self._documents[doc_id] for doc_id in top_doc_ids]
 
 

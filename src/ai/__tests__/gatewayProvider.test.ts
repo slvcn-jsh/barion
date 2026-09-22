@@ -86,6 +86,24 @@ describe('createGatewayCardGenerationProvider', () => {
     });
   });
 
+  it('prefers configured static token over signed-in session token', async () => {
+    const fetchImplementation = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ output: { candidates: [] } }),
+    })) as unknown as typeof fetch;
+    const accessTokenProvider = jest.fn().mockResolvedValue('signed-in-session-token');
+
+    await createGatewayCardGenerationProvider(
+      { ...config, accessToken: 'configured-static-token' },
+      fetchImplementation,
+      accessTokenProvider,
+    ).generate(request);
+
+    expect(accessTokenProvider).not.toHaveBeenCalled();
+    expect((fetchImplementation as jest.Mock).mock.calls[0][1].headers.Authorization)
+      .toBe('Bearer configured-static-token');
+  });
+
 
   it('refreshes session once after 401 and retries with the new access token', async () => {
     const fetchImplementation = jest

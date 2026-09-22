@@ -4,7 +4,7 @@ Barion remains educational study support, not clinical decision support, diagnos
 
 ## Boundaries
 
-`services/card_evaluation/` owns reusable risk, authority verification, secure retrieval, cache, and publication contract. `services/card_benchmark/` owns experiments, datasets, comparative analysis, and reports. Gateway evidence substring resolution proves coordinates only. It never proves claim support or current medical correctness.
+`services/card_evaluation/` owns reusable normalization, atomic claim extraction, grounding, contradiction checks, risk routing, authority verification, secure retrieval/cache, sanitization, and publication policy. `services/card_benchmark/` consumes this core through compatibility exports and retains experiments, datasets, comparative analysis, and reports. Gateway evidence substring resolution proves coordinates only. It never proves claim support or current medical correctness.
 
 ## Contract
 
@@ -17,7 +17,7 @@ Versioned result separates source span, source claim support, citation quality, 
 - `REVIEW`: held outside study queue with reason.
 - `REJECT`: preserved for audit, never added to study.
 
-Current gateway intentionally emits `REVIEW` after span validation because semantic claim grounding is not yet executed in gateway request path. Local extractive cards retain existing source-extracted policy.
+Gateway runs full claim evaluation after trusted span resolution. Successful `SANITIZE` results preserve original content, remove only unsupported optional fields, and rerun full evaluation before final `PUBLISH`. Ambiguous/stale spans, unresolved required verification, and authority conflicts remain `REVIEW`; unsupported or contradicted core claims remain `REJECT`. Local extractive cards retain deterministic source-extracted policy.
 
 ## Verification and offline behavior
 
@@ -37,4 +37,4 @@ Inspect evaluation reason codes, source-span hashes, policy versions, provider p
 
 ## Known limits
 
-Gateway currently holds model-generated cards because end-to-end semantic claim evaluation and production authority routing are not yet wired into deployed service persistence. Live mobile E2E and native performance measurements require device/deployment infrastructure.
+Production authority routing currently uses DailyMed only; unsupported authority categories fail closed to `REVIEW`. Verification cache is process-local unless a durable cache path is supplied by a deployment composition. Live mobile E2E and native performance measurements require device/deployment infrastructure.

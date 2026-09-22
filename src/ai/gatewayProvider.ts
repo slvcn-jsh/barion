@@ -21,8 +21,9 @@ export function createGatewayCardGenerationProvider(
       const timeout = setTimeout(() => abortController.abort(), config.timeoutMs);
       try {
         const body = JSON.stringify({ ...request, model: config.model });
-        const tokenFromProvider = accessTokenProvider ? await accessTokenProvider(false) : null;
-        let accessToken = tokenFromProvider ?? config.accessToken;
+        const configuredToken = config.accessToken?.trim() || null;
+        const tokenFromProvider = !configuredToken && accessTokenProvider ? await accessTokenProvider(false) : null;
+        let accessToken = configuredToken ?? tokenFromProvider;
         let response = await sendGatewayRequest(
           config.gatewayUrl,
           body,
@@ -30,9 +31,9 @@ export function createGatewayCardGenerationProvider(
           abortController.signal,
           fetchImplementation,
         );
-        if (response.status === 401 && accessTokenProvider) {
+        if (response.status === 401 && accessTokenProvider && !configuredToken) {
           const refreshed = await accessTokenProvider(true);
-          accessToken = refreshed ?? config.accessToken;
+          accessToken = refreshed;
           response = await sendGatewayRequest(
             config.gatewayUrl,
             body,

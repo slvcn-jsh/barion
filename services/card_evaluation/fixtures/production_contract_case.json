@@ -1,0 +1,97 @@
+{
+  "segment": {
+    "segmentId": "segment-1",
+    "locator": "Page 1",
+    "sectionPath": "Mechanism",
+    "text": "Metformin reduces hepatic glucose production."
+  },
+  "candidate": {
+    "segmentId": "segment-1",
+    "cardType": "mechanism",
+    "learningObjective": "Recall metformin action.",
+    "question": "What does metformin do?",
+    "answer": "Answer: Metformin reduces hepatic glucose production.",
+    "evidenceText": "Metformin reduces hepatic glucose production.",
+    "evidenceSpan": {
+      "version": "1.0.0",
+      "offsetEncoding": "utf16-code-units",
+      "boundaryConvention": "half-open",
+      "status": "exact",
+      "startOffset": 0,
+      "endOffset": 45,
+      "evidenceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+      "sourceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+      "matchCount": 1
+    },
+    "evaluation": {
+      "contractVersion": "1.0.0",
+      "evaluationVersion": "2.0.0",
+      "policyVersion": "3.1.0",
+      "sourceSpan": {
+        "version": "1.0.0",
+        "offsetEncoding": "utf16-code-units",
+        "boundaryConvention": "half-open",
+        "status": "exact",
+        "startOffset": 0,
+        "endOffset": 45,
+        "evidenceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+        "sourceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+        "matchCount": 1
+      },
+      "evidenceSpanVerified": true,
+      "sourceClaimSupported": "supported",
+      "citationStatus": "exact",
+      "medicalRisk": "low",
+      "medicalVerificationStatus": "verification_not_required",
+      "pedagogyStatus": "acceptable",
+      "publicationDisposition": "PUBLISH",
+      "reasonCodes": [],
+      "claimResults": [
+        {
+          "claimId": "claim-contract-1",
+          "field": "core_answer",
+          "claimText": "Metformin reduces hepatic glucose production",
+          "claimType": "factual",
+          "removable": false,
+          "riskLevel": "low",
+          "requiresVerification": false,
+          "sourceSupport": "supported_by_citation",
+          "sourceFidelity": "fully_grounded",
+          "citationStatus": "exact",
+          "verificationStatus": "verification_not_required",
+          "supportingEvidence": [
+            {
+              "segmentId": "segment-1",
+              "locator": "Page 1",
+              "text": "Metformin reduces hepatic glucose production.",
+              "tier": "citation"
+            }
+          ],
+          "contradictionEvidence": [],
+          "reasonCodes": []
+        }
+      ],
+      "originalCandidate": {
+        "segmentId": "segment-1",
+        "locator": "Page 1",
+        "cardType": "mechanism",
+        "question": "What does metformin do?",
+        "answer": "Answer: Metformin reduces hepatic glucose production.",
+        "learningObjective": "Recall metformin action.",
+        "evidenceText": "Metformin reduces hepatic glucose production.",
+        "evidenceSpan": {
+          "version": "1.0.0",
+          "offsetEncoding": "utf16-code-units",
+          "boundaryConvention": "half-open",
+          "status": "exact",
+          "startOffset": 0,
+          "endOffset": 45,
+          "evidenceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+          "sourceTextSha256": "a8c26c81c9900524bcb8d065e94b1e7e1446ffbe4eadcd4f951285710e66de1e",
+          "matchCount": 1
+        }
+      },
+      "validatorVersion": "1.1.0"
+    }
+  }
+}

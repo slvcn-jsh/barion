@@ -1,4 +1,10 @@
-import { decidePublication, EVALUATION_CONTRACT_VERSION, policyContract, PUBLICATION_POLICY_VERSION } from '@/ai/publicationPolicy';
+import {
+  decidePublication,
+  EVALUATION_CONTRACT_VERSION,
+  isAutoStudyEligible,
+  policyContract,
+  PUBLICATION_POLICY_VERSION,
+} from '@/ai/publicationPolicy';
 
 describe('shared production publication policy', () => {
   const contract = policyContract();
@@ -8,5 +14,11 @@ describe('shared production publication policy', () => {
   it('keeps contract and policy versions synchronized', () => {
     expect(contract.contractVersion).toBe(EVALUATION_CONTRACT_VERSION);
     expect(contract.policyVersion).toBe(PUBLICATION_POLICY_VERSION);
+  });
+  it('allows only PUBLISH candidates into normal study automatically', () => {
+    expect(isAutoStudyEligible('PUBLISH')).toBe(true);
+    expect(isAutoStudyEligible('SANITIZE')).toBe(false);
+    expect(isAutoStudyEligible('REVIEW')).toBe(false);
+    expect(isAutoStudyEligible('REJECT')).toBe(false);
   });
 });

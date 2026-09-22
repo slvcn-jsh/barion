@@ -2,36 +2,23 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from services.card_evaluation.models import SourceVerificationContext
+from services.card_evaluation.pipeline import evaluate_once
 from services.card_evaluation.verification import VerificationCoordinator
 
-from .claims import extract_claims
-from .grounding import ground_claims
 from .models import Card, Segment
-from .normalization import normalize_card
 from .policy import decide_publication
-from .validators import validate_card
 
 
 def evaluate_card(card: Card, segments: list[Segment], verifier: VerificationCoordinator | None = None,
                   authority_queries: dict[str, str] | None = None) -> dict[str, object]:
-    normalized = normalize_card(card)
-    claims, field_states = extract_claims(normalized)
-    grounding = ground_claims(normalized, claims, segments)
-    validations = validate_card(normalized, claims, grounding, segments)
-    verification = []
-    if verifier:
-        by_claim = {item.claimId: item for item in grounding}
-        source_evidence = "\n".join(reference.evidenceText for reference in normalized.sourceReferences)
-        for claim in claims:
-            source = by_claim[claim.claimId]
-            context = SourceVerificationContext(
-                sourceClaim=claim.claimText, sourceEvidence=source_evidence,
-                sourceSupport=source.sourceSupport, sourceFidelity=source.sourceFidelity,
-                authorityQuery=(authority_queries or {}).get(claim.claimId, ""),
-            )
-            verification.append(verifier.verify(claim, context))
-    policy = decide_publication(claims, grounding, validations, verification)
+    evaluation = evaluate_once(card, segments, verifier, authority_queries, verify_unsupported=True)
+    normalized = evaluation["normalizedCard"]
+    claims = evaluation["claims"]
+    field_states = evaluation["fieldStates"]
+    grounding = evaluation["grounding"]
+    validations = evaluation["validations"]
+    verification = evaluation["verification"]
+    policy = evaluation["policy"]
     if policy.decision == "SANITIZE":
         retained = [claim for claim in claims if claim.claimId in policy.retainedClaimIds]
         retained_grounding = [result for result in grounding if result.claimId in policy.retainedClaimIds]

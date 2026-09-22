@@ -1,14 +1,22 @@
 {
   "contractVersion": "1.0.0",
-  "policyVersion": "3.0.0",
+  "evaluationVersion": "2.0.0",
+  "policyVersion": "3.1.0",
+  "publicationDispositions": ["PUBLISH", "SANITIZE", "REVIEW", "REJECT"],
+  "sourceSupportStatuses": ["supported_by_citation", "supported_by_segment", "supported_elsewhere_in_source", "externally_supported_only", "unsupported", "contradicted", "uncertain"],
+  "citationStatuses": ["exact", "sufficient", "partial", "wrong_segment", "missing", "overbroad", "uncertain", "stale"],
+  "medicalRiskStatuses": ["critical", "high", "moderate", "low", "none"],
+  "medicalVerificationStatuses": ["verified", "likely_correct", "conflict", "incorrect", "outdated", "uncertain", "verification_not_required", "not_performed_offline", "authority_unavailable"],
   "cases": [
     {"id":"grounded-safe","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"low","verification":"verification_not_required","sanitized":false},"expected":"PUBLISH"},
     {"id":"unsupported-core","facts":{"coreSource":"unsupported","optionalSource":"supported","citation":"exact","risk":"low","verification":"verified","sanitized":false},"expected":"REJECT"},
     {"id":"unsupported-optional","facts":{"coreSource":"supported","optionalSource":"unsupported","citation":"exact","risk":"low","verification":"verification_not_required","sanitized":false},"expected":"SANITIZE"},
     {"id":"numeric-contradiction","facts":{"coreSource":"contradicted","optionalSource":"supported","citation":"exact","risk":"high","verification":"conflict","sanitized":false},"expected":"REJECT"},
     {"id":"citation-ambiguous","facts":{"coreSource":"supported","optionalSource":"supported","citation":"uncertain","risk":"high","verification":"verified","sanitized":false},"expected":"REVIEW"},
+    {"id":"citation-partial","facts":{"coreSource":"supported","optionalSource":"supported","citation":"partial","risk":"low","verification":"verification_not_required","sanitized":false},"expected":"REVIEW"},
     {"id":"source-conflict","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"high","verification":"conflict","sanitized":false},"expected":"REVIEW"},
     {"id":"high-risk-offline","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"high","verification":"not_performed_offline","sanitized":false},"expected":"REVIEW"},
+    {"id":"high-risk-not-verified","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"high","verification":"verification_not_required","sanitized":false},"expected":"REVIEW"},
     {"id":"verification-cached","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"high","verification":"verified","sanitized":false},"expected":"PUBLISH"},
     {"id":"sanitized-card","facts":{"coreSource":"supported","optionalSource":"supported","citation":"exact","risk":"low","verification":"verification_not_required","sanitized":true},"expected":"PUBLISH"},
     {"id":"stale-span","facts":{"coreSource":"supported","optionalSource":"supported","citation":"stale","risk":"low","verification":"verification_not_required","sanitized":false},"expected":"REVIEW"}

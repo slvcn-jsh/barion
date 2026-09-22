@@ -32,10 +32,18 @@ class AllowlistedHttpClient:
     def close(self) -> None:
         self._client.close()
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, *, timeout_seconds: float | None = None) -> bytes:
         self._validate_url(url)
+        timeout = self.limits.timeoutSeconds if timeout_seconds is None else min(self.limits.timeoutSeconds, timeout_seconds)
+        if timeout <= 0:
+            raise SecureRetrievalError("Authority request budget exhausted.")
         try:
-            with self._client.stream("GET", url, headers={"Accept": ", ".join(self.limits.allowedContentTypes)}) as response:
+            with self._client.stream(
+                "GET",
+                url,
+                headers={"Accept": ", ".join(self.limits.allowedContentTypes)},
+                timeout=timeout,
+            ) as response:
                 if 300 <= response.status_code < 400:
                     raise SecureRetrievalError("Authority redirect rejected.")
                 response.raise_for_status()

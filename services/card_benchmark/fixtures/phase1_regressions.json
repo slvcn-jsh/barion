@@ -35,7 +35,7 @@
       "caseId": "source_absent_plausible",
       "segments": [{"segmentId":"s7","locator":"Page 7","sectionPath":"Other","text":"The source discusses unrelated material.","startOffset":0,"endOffset":40}],
       "card": {"cardId":"absent","question":"What is a plausible fact?","answer":"Answer: Water freezes at 0 degrees Celsius.","system":"production","segmentId":"s7","locator":"Page 7","cardType":"definition","learningObjective":"Recall a fact.","evidenceText":"The source discusses unrelated material."},
-      "expected": {"decision":"REJECT","sourceSupport":["unsupported"],"citationStatus":["uncertain"],"claimTypes":["numeric"],"riskLevels":["moderate"],"numericValues":[0.0],"validationCodes":["NUMERIC_CLAIM_CLASSIFIED","QUESTION_ANSWER_ENTITY_MISMATCH","UNSUPPORTED_CLAIM"]}
+      "expected": {"decision":"REJECT","sourceSupport":["unsupported"],"citationStatus":["uncertain"],"claimTypes":["numeric"],"riskLevels":["moderate"],"numericValues":[0.0],"validationCodes":["NUMERIC_CLAIM_CLASSIFIED","UNSUPPORTED_CLAIM"]}
     },
     {
       "caseId": "exact_duplicate_deck",

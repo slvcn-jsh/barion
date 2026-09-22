@@ -57,15 +57,76 @@ class EvidenceSpan(StrictModel):
 
 class CandidateEvaluation(StrictModel):
     contractVersion: Literal["1.0.0"] = "1.0.0"
-    evaluationVersion: Literal["1.0.0"] = "1.0.0"
+    evaluationVersion: Literal["2.0.0"] = "2.0.0"
     policyVersion: Literal[POLICY_VERSION] = POLICY_VERSION
+    sourceSpan: EvidenceSpan
     evidenceSpanVerified: bool
     sourceClaimSupported: Literal["not_evaluated", "supported", "unsupported", "contradicted", "uncertain"]
     citationStatus: Literal["exact", "sufficient", "partial", "wrong_segment", "missing", "overbroad", "uncertain", "stale"]
     medicalRisk: Literal["critical", "high", "moderate", "low", "none"]
     medicalVerificationStatus: Literal["verified", "likely_correct", "conflict", "incorrect", "outdated", "uncertain", "verification_not_required", "not_performed_offline", "authority_unavailable"]
+    pedagogyStatus: Literal["not_evaluated", "acceptable", "review"]
     publicationDisposition: Literal["PUBLISH", "SANITIZE", "REVIEW", "REJECT"]
     reasonCodes: list[str]
+    claimResults: list["ClaimEvaluation"]
+    originalCandidate: "OriginalCandidate"
+    sanitization: "SanitizationResult | None" = None
+    validatorVersion: str = Field(min_length=1, max_length=80)
+
+
+class ClaimEvidence(StrictModel):
+    segmentId: str
+    locator: str
+    text: str
+    tier: Literal["citation", "segment", "document"]
+
+
+class ClaimEvaluation(StrictModel):
+    claimId: str
+    field: Literal["question", "core_answer", "explanation", "study_note", "learning_objective"]
+    claimText: str
+    claimType: str
+    removable: bool
+    riskLevel: Literal["critical", "high", "moderate", "low"]
+    requiresVerification: bool
+    sourceSupport: Literal[
+        "supported_by_citation", "supported_by_segment", "supported_elsewhere_in_source",
+        "externally_supported_only", "unsupported", "contradicted", "uncertain",
+    ]
+    sourceFidelity: Literal[
+        "fully_grounded", "partially_grounded", "unsupported", "contradicted_by_source",
+        "source_not_found", "insufficient_evidence", "source_conflict", "uncertain",
+    ]
+    citationStatus: Literal["exact", "sufficient", "partial", "wrong_segment", "missing", "overbroad", "uncertain", "stale"]
+    verificationStatus: Literal["verified", "likely_correct", "conflict", "incorrect", "outdated", "uncertain", "verification_not_required", "not_performed_offline", "authority_unavailable"]
+    supportingEvidence: list[ClaimEvidence]
+    contradictionEvidence: list[str]
+    reasonCodes: list[str]
+
+
+class OriginalCandidate(StrictModel):
+    segmentId: str
+    locator: str
+    cardType: str
+    question: str
+    answer: str
+    learningObjective: str
+    evidenceText: str
+    evidenceSpan: EvidenceSpan
+
+
+class RemovedContent(StrictModel):
+    field: Literal["explanation", "study_note"]
+    text: str
+
+
+class SanitizationResult(StrictModel):
+    version: Literal["1.0.0"]
+    initialDisposition: Literal["SANITIZE"]
+    finalDisposition: Literal["PUBLISH", "REVIEW", "REJECT"]
+    removedContent: list[RemovedContent]
+    reason: str
+    reevaluated: Literal[True]
 
 
 class GeneratedCard(StrictModel):

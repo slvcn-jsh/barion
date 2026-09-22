@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 
+from services.card_evaluation.models import Card as EvaluationCard
+from services.card_evaluation.models import Segment as EvaluationSegment
+from services.card_evaluation.pipeline import evaluate_production_candidate
+from services.card_evaluation.verification import VerificationCoordinator
 from .errors import GatewayError
 from services.source_span import resolve_source_span
 
@@ -11,28 +15,50 @@ from .models import CandidateEvaluation, CardGenerationRequest, GeneratedCard, G
 def validate_grounded_output(
     request: CardGenerationRequest,
     output: GeneratedCardOutput,
+    verifier: VerificationCoordinator | None = None,
+    *,
+    verification_deadline: float | None = None,
 ) -> GeneratedCardOutput:
     segments = _read_segments(request.userPrompt)
     by_id = {segment.segmentId: segment for segment in segments}
+    evaluation_segments = [
+        EvaluationSegment(segment.segmentId, segment.locator, segment.sectionPath, segment.text, 0, len(segment.text))
+        for segment in segments
+    ]
+    evaluator = verifier or VerificationCoordinator()
     seen: set[str] = set()
     valid = []
 
-    for candidate in output.candidates[: request.maxCandidates]:
+    for index, candidate in enumerate(output.candidates[: request.maxCandidates]):
         segment = by_id.get(candidate.segmentId)
         if segment is None:
             continue
         span = resolve_source_span(segment.text, candidate.evidenceText)
-        if span.status not in {"exact", "normalized", "context-disambiguated"}:
-            continue
+        original = EvaluationCard(
+            cardId=f"{request.requestId}:{index}",
+            question=candidate.question,
+            answer=candidate.answer,
+            system="production",
+            segmentId=candidate.segmentId,
+            locator=segment.locator,
+            cardType=candidate.cardType,
+            learningObjective=candidate.learningObjective,
+            evidenceText=candidate.evidenceText,
+            evidenceSpan=span.to_dict(),
+        )
+        effective, evaluation = evaluate_production_candidate(
+            original,
+            evaluation_segments,
+            evaluator,
+            verification_deadline=verification_deadline,
+        )
         candidate = GeneratedCard(**{
             **candidate.model_dump(exclude={"evidenceSpan", "evaluation"}),
+            "question": effective.question,
+            "answer": effective.answer,
+            "learningObjective": effective.learningObjective,
             "evidenceSpan": span.to_dict(),
-            "evaluation": CandidateEvaluation(
-                evidenceSpanVerified=True, sourceClaimSupported="not_evaluated",
-                citationStatus="exact", medicalRisk="none",
-                medicalVerificationStatus="verification_not_required",
-                publicationDisposition="REVIEW", reasonCodes=["CLAIM_SUPPORT_NOT_EVALUATED"],
-            ),
+            "evaluation": CandidateEvaluation.model_validate(evaluation),
         })
         duplicate_key = _normalize(f"{candidate.question}\n{candidate.answer}")
         if duplicate_key in seen:

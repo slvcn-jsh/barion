@@ -92,6 +92,14 @@ async def test_bm25_retrieval_no_documents():
 
 
 @pytest.mark.asyncio
+async def test_bm25_retrieval_returns_no_evidence_for_zero_relevance(sample_segments):
+    retriever = BM25Retriever()
+    retriever.index_segments(sample_segments)
+    request = BariChatRequest(message="photosynthesis chlorophyll", mode="source-strict")
+    assert await retriever.retrieve_evidence(request, max_segments=5) == []
+
+
+@pytest.mark.asyncio
 async def test_bm25_retrieval_empty_query(sample_segments):
     """BM25 handles short/minimal query gracefully."""
     retriever = BM25Retriever()

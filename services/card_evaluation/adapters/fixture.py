@@ -23,7 +23,8 @@ class FixtureAuthorityAdapter:
         return any(_normalize(str(case["claim"])) == normalized for case in self.cases)
 
     def verify_claim(self, claim_id: str, claim: str, route: RiskRoute,
-                     context: SourceVerificationContext, cache_key: str) -> VerificationResult:
+                     context: SourceVerificationContext, cache_key: str,
+                     *, deadline: float | None = None) -> VerificationResult:
         case = next(case for case in self.cases if _normalize(str(case["claim"])) == _normalize(claim))
         data = dict(case["result"])
         return VerificationResult(

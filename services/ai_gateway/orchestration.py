@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from time import monotonic
+
+from services.card_evaluation.verification import VerificationCoordinator
 
 from .errors import GatewayError
 from .models import BariChatRequest, BariChatResponse, BariGeneration, CardGenerationRequest, CardGenerationResponse
@@ -9,22 +12,34 @@ from .retrieval import NoOpRetriever, SourceRetriever
 from .telemetry import TelemetryEvent, record
 from .validation import validate_grounded_output
 
+DEFAULT_REQUEST_BUDGET_SECONDS = 25.0
+
 
 class GenerationOrchestrator:
     def __init__(
         self,
         provider: GenerationProvider,
         retriever: SourceRetriever | None = None,
+        verifier: VerificationCoordinator | None = None,
+        request_budget_seconds: float = DEFAULT_REQUEST_BUDGET_SECONDS,
     ) -> None:
         self.provider = provider
         self.retriever = retriever or NoOpRetriever()
-        self._conversations: dict[str, list[dict[str, str]]] = {}
+        self.verifier = verifier or VerificationCoordinator()
+        self.request_budget_seconds = request_budget_seconds
+        self._conversations: dict[tuple[str, str], list[dict[str, str]]] = {}
 
     async def generate_cards(self, request: CardGenerationRequest) -> CardGenerationResponse:
         started = monotonic()
         try:
             result = await self.provider.generate_cards(request)
-            output = validate_grounded_output(request, result.output)
+            output = await asyncio.to_thread(
+                validate_grounded_output,
+                request,
+                result.output,
+                self.verifier,
+                verification_deadline=started + self.request_budget_seconds,
+            )
             if len(output.candidates) < request.minCandidates:
                 raise GatewayError(
                     "insufficient_candidates",
@@ -64,12 +79,13 @@ class GenerationOrchestrator:
             ))
             raise
 
-    async def bari_chat(self, request: BariChatRequest) -> BariChatResponse:
+    async def bari_chat(self, request: BariChatRequest, identity_subject: str) -> BariChatResponse:
         started = monotonic()
 
         # Get or initialize conversation history
         conversation_id = request.conversationId or ""
-        history = self._conversations.get(conversation_id, [])
+        conversation_key = (identity_subject, conversation_id)
+        history = self._conversations.get(conversation_key, [])
 
         # Limit history to last 10 exchanges (20 messages) to manage context window
         if len(history) > 20:
@@ -99,7 +115,7 @@ class GenerationOrchestrator:
             if conversation_id:
                 history.append({"role": "user", "content": request.message})
                 history.append({"role": "model", "content": result.message})
-                self._conversations[conversation_id] = history
+                self._conversations[conversation_key] = history
 
             # Extract citations from response if evidence was provided
             citations = []

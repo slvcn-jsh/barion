@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import replace
+from time import monotonic
 from typing import Iterable
 
 from .adapters.base import AuthorityAdapter
@@ -11,17 +12,18 @@ from .models import SourceVerificationContext, VerificationResult
 from .risk import RISK_ROUTER_VERSION, route_claim
 
 VERIFICATION_SCHEMA_VERSION = "1.0.0"
-AUTHORITY_QUERY_VERSION = "1.0.0"
+AUTHORITY_QUERY_VERSION = "1.1.0"
 
 
 class VerificationCoordinator:
     def __init__(self, adapters: Iterable[AuthorityAdapter] = (), cache: VerificationCache | None = None,
-                 *, offline: bool = False) -> None:
+                 *, offline: bool = False, clock=monotonic) -> None:
         self.adapters = tuple(adapters)
         self.cache = cache or VerificationCache()
         self.offline = offline
+        self._clock = clock
 
-    def verify(self, claim, context: SourceVerificationContext) -> VerificationResult:
+    def verify(self, claim, context: SourceVerificationContext, *, deadline: float | None = None) -> VerificationResult:
         route = route_claim(claim)
         normalized = _normalize(claim.claimText)
         if not route.required:
@@ -39,14 +41,23 @@ class VerificationCoordinator:
         key = _cache_key(normalized, route.category, adapter_id, adapter_version)
         cached = self.cache.get(key)
         if cached:
-            return cached
+            return replace(
+                cached,
+                claimId=claim.claimId,
+                sourceClaim=context.sourceClaim,
+                sourceEvidence=context.sourceEvidence,
+                sourceSupport=context.sourceSupport,
+            )
         if self.offline:
             return _held(claim.claimId, normalized, route, context, key, adapter_version, "not_performed_offline",
                          "Offline and no valid cached authority result exists.")
         if adapter is None:
             return _held(claim.claimId, normalized, route, context, key, adapter_version, "authority_unavailable",
                          "No authoritative adapter supports this minimized claim context.")
-        result = adapter.verify_claim(claim.claimId, claim.claimText, route, context, key)
+        if deadline is not None and self._clock() >= deadline:
+            return _held(claim.claimId, normalized, route, context, key, adapter_version, "authority_unavailable",
+                         "Authority verification request budget was exhausted.")
+        result = adapter.verify_claim(claim.claimId, claim.claimText, route, context, key, deadline=deadline)
         result = replace(result, schemaVersion=VERIFICATION_SCHEMA_VERSION)
         if result.verificationStatus not in {"authority_unavailable", "not_performed_offline"}:
             self.cache.put(result)

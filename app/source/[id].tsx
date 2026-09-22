@@ -420,6 +420,7 @@ export default function SourceDetailScreen() {
             const editing = editingId === candidate.id;
             const acting = actionId === candidate.id;
             const evaluation = parseCandidateEvaluation(candidate.evaluationJson);
+            const problematicClaim = evaluation ? firstProblematicClaim(evaluation) : null;
             return (
               <View key={candidate.id} style={styles.candidateCard}>
                 <View style={styles.candidateTopline}>
@@ -489,6 +490,20 @@ export default function SourceDetailScreen() {
                     <Text style={styles.holdTitle}>{evaluation.publicationDisposition} · {explainDisposition(evaluation)}</Text>
                     <Text style={styles.holdDetail}>Grounding: {evaluation.sourceClaimSupported} · Citation: {evaluation.citationStatus}</Text>
                     <Text style={styles.holdDetail}>Medical verification: {evaluation.medicalVerificationStatus}</Text>
+                    {problematicClaim ? (
+                      <Text style={styles.holdDetail}>
+                        Claim held ({formatEvaluationField(problematicClaim.field)} · {problematicClaim.sourceSupport}): {problematicClaim.claimText}
+                      </Text>
+                    ) : null}
+                    {problematicClaim?.supportingEvidence[0] ? (
+                      <Text style={styles.holdDetail}>Supporting source: {problematicClaim.supportingEvidence[0].text}</Text>
+                    ) : null}
+                    {problematicClaim?.contradictionEvidence[0] ? (
+                      <Text style={styles.holdDetail}>Conflict: {problematicClaim.contradictionEvidence[0]}</Text>
+                    ) : null}
+                    {evaluation.sanitization ? (
+                      <Text style={styles.holdDetail}>Sanitization: {evaluation.sanitization.reason}</Text>
+                    ) : null}
                   </View>
                 ) : null}
 
@@ -508,12 +523,16 @@ export default function SourceDetailScreen() {
                     </>
                   ) : (
                     <>
-                      <AppButton
-                        disabled={acting || !source.defaultDeckId}
-                        label={acting ? 'Adding…' : 'Approve card'}
-                        icon="checkmark-circle-outline"
-                        onPress={() => void runAction(candidate.id, () => approveCandidate(candidate.id, source.defaultDeckId!))}
-                      />
+                      {evaluation?.publicationDisposition === 'REJECT' ? (
+                        <AppButton disabled label="Blocked by quality gate" icon="shield-outline" onPress={() => undefined} />
+                      ) : (
+                        <AppButton
+                          disabled={acting || !source.defaultDeckId}
+                          label={acting ? 'Adding…' : 'Approve card'}
+                          icon="checkmark-circle-outline"
+                          onPress={() => void runAction(candidate.id, () => approveCandidate(candidate.id, source.defaultDeckId!))}
+                        />
+                      )}
                       <AppButton label="Edit" icon="create-outline" variant="secondary" onPress={() => beginEditing(candidate)} />
                       <AppButton label="Reject" icon="close" variant="quiet" onPress={() => confirmReject(candidate.id)} />
                     </>
@@ -693,6 +712,17 @@ type CandidateEvaluationView = {
   sourceClaimSupported: string;
   citationStatus: string;
   medicalVerificationStatus: string;
+  claimResults?: {
+    claimText: string;
+    field: string;
+    sourceSupport: string;
+    citationStatus: string;
+    verificationStatus: string;
+    reasonCodes: string[];
+    contradictionEvidence: string[];
+    supportingEvidence: { text: string }[];
+  }[];
+  sanitization?: { reason: string; reevaluated: boolean; finalDisposition: string };
 };
 
 function parseCandidateEvaluation(value?: string | null): CandidateEvaluationView | null {
@@ -704,10 +734,27 @@ function explainDisposition(evaluation: CandidateEvaluationView) {
   const code = evaluation.reasonCodes[0];
   if (code === 'SOURCE_CONFLICT') return 'Source claim conflicts with current authoritative evidence.';
   if (code === 'HIGH_RISK_UNVERIFIED') return 'High-risk claim awaits authoritative verification.';
-  if (code === 'EVIDENCE_SPAN_UNRESOLVED') return 'Cited text could not be uniquely located.';
-  if (code === 'UNSUPPORTED_OPTIONAL') return 'Optional explanation contains unsupported material.';
+  if (code === 'SOURCE_SPAN_UNRESOLVED' || code === 'STALE_OR_AMBIGUOUS_SOURCE_SPAN') return 'Cited text could not be uniquely located.';
+  if (code === 'REMOVABLE_OPTIONAL_CLAIMS_UNSUPPORTED') return 'Optional explanation contains unsupported material.';
+  if (code === 'UNSUPPORTED_CORE_CLAIM') return 'Core answer is not supported by this source.';
+  if (code === 'CONTRADICTED_CORE_CLAIM') return 'Core answer conflicts with this source.';
+  if (code === 'CORE_EVIDENCE_UNCERTAIN') return 'Source support is too uncertain for automatic study.';
+  if (code === 'SANITIZED_CARD_FAILED_REEVALUATION') return 'Removed optional content, but remaining card still failed evaluation.';
   if (evaluation.publicationDisposition === 'REJECT') return 'Candidate failed source or safety requirements.';
-  return 'Claim support has not been fully evaluated; card remains held.';
+  return 'Card remains held until source or safety evidence is resolved.';
+}
+
+function firstProblematicClaim(evaluation: CandidateEvaluationView) {
+  return evaluation.claimResults?.find((claim) =>
+    ['unsupported', 'contradicted', 'uncertain'].includes(claim.sourceSupport)
+    || ['conflict', 'incorrect', 'outdated', 'authority_unavailable', 'not_performed_offline'].includes(claim.verificationStatus)
+    || claim.reasonCodes.length > 0
+    || claim.contradictionEvidence.length > 0,
+  ) ?? null;
+}
+
+function formatEvaluationField(field: string) {
+  return field.replace(/_/g, ' ');
 }
 
 function formatSpanProvenance(value: string) {
