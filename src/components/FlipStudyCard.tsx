@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { EvidenceDisplay, ReviewStyle, StudyCard } from '@/domain/types';
-import { cardTrustSummary } from '@/cards/trust';
+import { SourceProvenance } from '@/components/SourceProvenance';
 import { StructuredAnswer } from '@/components/StructuredAnswer';
 import { colors, fonts, radii } from '@/theme/colors';
 
@@ -17,7 +17,6 @@ type Props = {
 
 export function FlipStudyCard({ card, revealed, onFlip }: Props) {
   const flip = useRef(new Animated.Value(revealed ? 1 : 0)).current;
-  const trust = cardTrustSummary(card);
 
   useEffect(() => {
     Animated.spring(flip, {
@@ -46,7 +45,7 @@ export function FlipStudyCard({ card, revealed, onFlip }: Props) {
   });
 
   return (
-    <Pressable accessibilityRole="button" onPress={onFlip} style={styles.pressable}>
+    <View style={styles.container}>
       <View style={styles.stage}>
         <Animated.View
           style={[
@@ -60,24 +59,27 @@ export function FlipStudyCard({ card, revealed, onFlip }: Props) {
             },
           ]}
         >
-          <View style={styles.faceHeader}>
-            <View style={styles.deckChip}>
-              <Ionicons name="albums-outline" size={17} color={colors.tealDark} />
-              <Text numberOfLines={1} style={styles.deckChipText}>
-                {card.deckTitle}
+          <Pressable accessibilityRole="button" accessibilityLabel="Flip to reveal answer" onPress={onFlip} style={styles.cardInnerPressable}>
+            <View style={styles.faceHeader}>
+              <View style={styles.deckChip}>
+                <Ionicons name="albums-outline" size={17} color={colors.tealDark} />
+                <Text numberOfLines={1} style={styles.deckChipText}>
+                  {card.deckTitle}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.centerContent}>
+              <Text adjustsFontSizeToFit minimumFontScale={0.72} style={styles.prompt}>
+                {card.prompt}
               </Text>
             </View>
-            {trust.tone === 'review' ? <TrustPill label={trust.label} tone={trust.tone} /> : null}
-          </View>
 
-          <View style={styles.centerContent}>
-            <Text adjustsFontSizeToFit minimumFontScale={0.72} style={styles.prompt}>
-              {card.prompt}
-            </Text>
-          </View>
-
-          {card.weakScore ? <View style={styles.weakBadge}><Ionicons name="fitness-outline" size={15} color={colors.coral} /><Text style={styles.weakBadgeText}>Repair priority</Text></View> : null}
-
+            <View style={styles.tapToReveal}>
+              <Ionicons name="eye-outline" size={15} color={colors.muted} />
+              <Text style={styles.tapToRevealText}>Tap card to reveal answer</Text>
+            </View>
+          </Pressable>
         </Animated.View>
 
         <Animated.View
@@ -99,48 +101,20 @@ export function FlipStudyCard({ card, revealed, onFlip }: Props) {
                 Answer
               </Text>
             </View>
-            {trust.tone === 'review' ? <TrustPill label={trust.label} tone={trust.tone} /> : null}
           </View>
 
-          <View style={styles.answerContent}>
-            <StructuredAnswer answer={card.answer} variant="study" />
-          </View>
+          <ScrollView
+            contentContainerStyle={styles.answerScrollContent}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.answerContent}>
+              <StructuredAnswer answer={card.answer} variant="study" />
+              <SourceProvenance evidence={card.evidence} />
+            </View>
+          </ScrollView>
         </Animated.View>
       </View>
-    </Pressable>
-  );
-}
-
-function TrustPill({ label, tone }: { label: string; tone: ReturnType<typeof cardTrustSummary>['tone'] }) {
-  const style =
-    tone === 'verified'
-      ? styles.trustVerified
-      : tone === 'review'
-        ? styles.trustReview
-        : tone === 'manual'
-          ? styles.trustManual
-          : styles.trustSource;
-  const textStyle =
-    tone === 'verified'
-      ? styles.trustVerifiedText
-      : tone === 'review'
-        ? styles.trustReviewText
-        : tone === 'manual'
-          ? styles.trustManualText
-          : styles.trustSourceText;
-  const icon =
-    tone === 'verified'
-      ? 'shield-checkmark-outline'
-      : tone === 'review'
-        ? 'alert-circle-outline'
-        : tone === 'manual'
-          ? 'create-outline'
-          : 'link-outline';
-
-  return (
-    <View style={[styles.trustPill, style]}>
-      <Ionicons name={icon} size={14} color={textStyle.color} />
-      <Text numberOfLines={1} style={[styles.trustPillText, textStyle]}>{label}</Text>
     </View>
   );
 }
@@ -151,15 +125,18 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 4,
+    paddingVertical: 12,
+  },
+  answerScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   back: {
     backgroundColor: colors.surface,
   },
-  centerContent: {
-    alignItems: 'center',
+  cardInnerPressable: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 4,
+    justifyContent: 'space-between',
   },
   cardShadow:
     Platform.OS === 'web'
@@ -173,6 +150,16 @@ const styles = StyleSheet.create({
           shadowOpacity: 0.08,
           shadowRadius: 20,
         },
+  centerContent: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  container: {
+    borderRadius: radii.md,
+    width: '100%',
+  },
   deckChip: {
     alignItems: 'center',
     backgroundColor: colors.surfaceMuted,
@@ -196,7 +183,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     bottom: 0,
     left: 0,
-    minHeight: 430,
+    minHeight: 400,
     padding: 20,
     position: 'absolute',
     right: 0,
@@ -206,33 +193,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 12,
+    marginBottom: 8,
   },
   front: {
     backgroundColor: colors.surface,
   },
-  pressable: {
-    borderRadius: radii.md,
-  },
   prompt: {
     color: colors.ink,
     fontFamily: fonts.extraBold,
-    fontSize: 31,
-    lineHeight: 39,
+    fontSize: 27,
+    lineHeight: 36,
     textAlign: 'center',
   },
   stage: {
-    minHeight: 430,
+    minHeight: 400,
   },
-  trustManual: { backgroundColor: colors.dangerSurface },
-  trustManualText: { color: colors.coral },
-  trustPill: { alignItems: 'center', borderRadius: radii.pill, flexDirection: 'row', gap: 5, maxWidth: 190, minHeight: 30, paddingHorizontal: 9 },
-  trustPillText: { fontFamily: fonts.bold, fontSize: 10, textTransform: 'uppercase' },
-  trustReview: { backgroundColor: colors.warningSurface },
-  trustReviewText: { color: '#9a5b09' },
-  trustSource: { backgroundColor: colors.surfaceTeal },
-  trustSourceText: { color: colors.tealDark },
-  trustVerified: { backgroundColor: '#eaf8f2' },
-  trustVerifiedText: { color: colors.green },
-  weakBadge: { alignItems: 'center', alignSelf: 'center', backgroundColor: colors.dangerSurface, borderRadius: radii.pill, flexDirection: 'row', gap: 6, marginBottom: 9, paddingHorizontal: 10, paddingVertical: 6 },
-  weakBadgeText: { color: colors.coral, fontFamily: fonts.bold, fontSize: 10, textTransform: 'uppercase' },
+  tapToReveal: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingVertical: 6,
+  },
+  tapToRevealText: {
+    color: colors.muted,
+    fontFamily: fonts.medium,
+    fontSize: 12,
+  },
 });

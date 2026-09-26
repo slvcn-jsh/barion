@@ -42,19 +42,23 @@ Client development values:
 ```powershell
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_URL='http://127.0.0.1:8790'
 $env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-2.5-flash'
+$env:EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS='120000'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN='same-development-token'
 npm run web
 ```
+
+`npm start` and `npm run web` start the local gateway before Expo. If port `8790` already has a healthy Barion gateway, development startup reuses it instead of launching a duplicate process. Use `npm run gateway` and `npm run start:expo` only when separate terminals are intentionally preferred.
 
 `EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN` is only acceptable in local static-auth mode. Expo embeds it in compiled bundles, so it is not a secret and must never be a provider API key. Production clients send short-lived Supabase session access tokens obtained at request time; omit static token from production builds.
 
 Physical devices must use gateway machine's LAN address. Production gateway URL must use HTTPS.
 
-Gemini calls retry bounded transient failures: HTTP 429/500/502/503/504, timeouts, and transport errors. Defaults use 4 total attempts, full-jitter exponential delays capped at 16 seconds, and provider `Retry-After`/`RetryInfo.retryDelay` hints capped at same maximum. Authentication and invalid-request failures are not retried.
+Gemini calls retry bounded transient failures: HTTP 429/500/502/503/504, timeouts, and transport errors. Recommended local settings use 3 total attempts, 20 seconds per provider attempt, full-jitter exponential delays capped at 16 seconds, and a 120-second Expo gateway deadline. Provider `Retry-After`/`RetryInfo.retryDelay` hints remain capped at same maximum. Authentication and invalid-request failures are not retried.
 
 ## API
 
 - `GET /v1/health`: dependency status without credentials.
+- `GET /v1/auth-check`: verifies configured gateway bearer credentials without invoking provider generation.
 - `POST /v1/card-generation`: authenticated structured generation; gateway derives trusted spans, extracts atomic claims, grounds them against supplied source segments, routes selective medical verification, applies PUBLISH/SANITIZE/REVIEW/REJECT policy, and returns claim-level evaluation metadata. Sanitized candidates are fully reevaluated before publication.
 - `POST /v1/bari/chat`: authenticated source-strict foundation. AI chat generation intentionally deferred to Bari sprint.
 

@@ -11,10 +11,10 @@ import type {
 } from '@/ai/types';
 import { parseGroundedCardResponse } from '@/ai/validation';
 
-const LOCAL_PROVIDER_ID = 'local-extractive';
-const LOCAL_MODEL_ID = 'barion-extractive-rules';
-const LOCAL_PROMPT_ID = 'extractive-rules';
-const LOCAL_PROMPT_VERSION = 'extractive-v1';
+export const LOCAL_PROVIDER_ID = 'local-extractive';
+export const LOCAL_MODEL_ID = 'barion-extractive-rules';
+export const LOCAL_PROMPT_ID = 'extractive-rules';
+export const LOCAL_PROMPT_VERSION = 'extractive-v1';
 
 export async function generateGroundedCardsWithFallback(
   provider: CardGenerationProvider | null,
@@ -24,15 +24,39 @@ export async function generateGroundedCardsWithFallback(
   initialFallbackReason?: string,
 ): Promise<GroundedCardGenerationResult> {
   validateInput(input);
+  const startedAt = Date.now();
   if (provider) {
     try {
       return await generateGroundedCards(provider, input, telemetry);
     } catch (error) {
-      return localResult(input.requestId, await resolveLocalCandidates(createLocalCandidates(), input), asBarionAIError(error).code);
+      const failure = asBarionAIError(error);
+      const result = localResult(
+        input.requestId,
+        await resolveLocalCandidates(createLocalCandidates(), input),
+        Date.now() - startedAt,
+        {
+          reason: failure.code,
+          attemptedProviderId: failure.providerId ?? provider.id,
+          attemptedModelId: failure.modelId ?? provider.model,
+          providerRequestId: failure.providerRequestId,
+          remoteCandidateCount: failure.remoteCandidateCount,
+          inputTokens: failure.inputTokens,
+          outputTokens: failure.outputTokens,
+        },
+      );
+      recordSafely(telemetry, fallbackTelemetry(result));
+      return result;
     }
   }
 
-  return localResult(input.requestId, await resolveLocalCandidates(createLocalCandidates(), input), initialFallbackReason);
+  const result = localResult(
+    input.requestId,
+    await resolveLocalCandidates(createLocalCandidates(), input),
+    Date.now() - startedAt,
+    { reason: initialFallbackReason ?? 'gateway_not_configured' },
+  );
+  recordSafely(telemetry, fallbackTelemetry(result));
+  return result;
 }
 
 export async function generateGroundedCards(
@@ -46,7 +70,22 @@ export async function generateGroundedCards(
 
   try {
     const response = await provider.generate(request);
-    const candidates = await parseGroundedCardResponse(response.output, input.segments, input.maxCandidates);
+    let candidates: GroundedCardGenerationResult['candidates'];
+    try {
+      candidates = await parseGroundedCardResponse(response.output, input.segments, input.maxCandidates);
+    } catch (error) {
+      const failure = asBarionAIError(error);
+      throw new BarionAIError(failure.code, failure.message, {
+        recoverable: failure.recoverable,
+        providerId: response.providerId ?? provider.id,
+        modelId: response.modelId ?? provider.model,
+        httpStatus: failure.httpStatus,
+        providerRequestId: response.providerRequestId,
+        inputTokens: response.usage?.inputTokens,
+        outputTokens: response.usage?.outputTokens,
+        remoteCandidateCount: countRemoteCandidates(response.output),
+      });
+    }
     recordSafely(telemetry, {
       requestId: input.requestId,
       operation: 'card-generation',
@@ -55,6 +94,8 @@ export async function generateGroundedCards(
       promptVersion: request.promptVersion,
       durationMs: Date.now() - startedAt,
       success: true,
+      generationMode: 'REMOTE_AI',
+      fallbackUsed: false,
       candidateCount: candidates.length,
       inputTokens: response.usage?.inputTokens,
       outputTokens: response.usage?.outputTokens,
@@ -64,12 +105,18 @@ export async function generateGroundedCards(
       candidates,
       provenance: {
         requestId: input.requestId,
+        generationMode: 'REMOTE_AI',
+        fallbackUsed: false,
         providerRequestId: response.providerRequestId,
         providerId: response.providerId ?? provider.id,
         modelId: response.modelId ?? provider.model,
+        attemptedProviderId: provider.id,
+        attemptedModelId: provider.model,
         promptId: request.promptId,
         promptVersion: request.promptVersion,
         generatedAt: new Date().toISOString(),
+        remoteCandidateCount: candidates.length,
+        durationMs: Date.now() - startedAt,
         usage: response.usage,
       },
     };
@@ -92,19 +139,62 @@ export async function generateGroundedCards(
 function localResult(
   requestId: string,
   candidates: GroundedCardGenerationResult['candidates'],
-  fallbackReason?: string,
+  durationMs: number,
+  attempt: {
+    reason?: string;
+    attemptedProviderId?: string;
+    attemptedModelId?: string;
+    providerRequestId?: string;
+    remoteCandidateCount?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+  } = {},
 ): GroundedCardGenerationResult {
   return {
     candidates,
     provenance: {
       requestId,
+      generationMode: 'LOCAL_FALLBACK',
+      fallbackUsed: true,
+      providerRequestId: attempt.providerRequestId,
       providerId: LOCAL_PROVIDER_ID,
       modelId: LOCAL_MODEL_ID,
+      attemptedProviderId: attempt.attemptedProviderId,
+      attemptedModelId: attempt.attemptedModelId,
       promptId: LOCAL_PROMPT_ID,
       promptVersion: LOCAL_PROMPT_VERSION,
       generatedAt: new Date().toISOString(),
-      fallbackReason,
+      remoteCandidateCount: attempt.remoteCandidateCount ?? 0,
+      durationMs,
+      usage: attempt.inputTokens !== undefined || attempt.outputTokens !== undefined
+        ? { inputTokens: attempt.inputTokens, outputTokens: attempt.outputTokens }
+        : undefined,
+      fallbackReason: attempt.reason,
     },
+  };
+}
+
+function countRemoteCandidates(output: unknown) {
+  if (typeof output !== 'object' || output === null || Array.isArray(output)) return 0;
+  const candidates = (output as Record<string, unknown>).candidates;
+  return Array.isArray(candidates) ? candidates.length : 0;
+}
+
+function fallbackTelemetry(result: GroundedCardGenerationResult): AITelemetryEvent {
+  return {
+    requestId: result.provenance.requestId,
+    operation: 'card-generation',
+    providerId: result.provenance.providerId,
+    modelId: result.provenance.modelId,
+    promptVersion: result.provenance.promptVersion,
+    durationMs: result.provenance.durationMs,
+    success: true,
+    generationMode: result.provenance.generationMode,
+    fallbackUsed: true,
+    candidateCount: result.candidates.length,
+    inputTokens: result.provenance.usage?.inputTokens,
+    outputTokens: result.provenance.usage?.outputTokens,
+    errorCode: result.provenance.fallbackReason,
   };
 }
 

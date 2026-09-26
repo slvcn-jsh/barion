@@ -49,15 +49,15 @@ Barion is an offline-first medical and health-science study app. It imports lear
 
 ## 5. CURRENT CODEX SESSION
 
-**Goal:** complete Workstream A by connecting reusable claim evaluation, medical-risk routing, selective authority verification, sanitization, and publication policy to production gateway/mobile persistence.
+**Goal:** finish generation-resilience follow-up: truthful remote/fallback provenance, safe learner-facing status, preservation of existing cards, interrupted-job recovery, and browser E2E coverage.
 
-**Implementation:** production gateway now evaluates every remote candidate after trusted span resolution; shared evaluator owns claims, grounding, contradictions, risk, verification, policy, sanitization, and reevaluation; mobile independently validates evaluation envelopes, persists original/sanitized provenance, auto-publishes only PUBLISH candidates, and explains held claims in review UI.
+**Implementation:** generation jobs now persist generation mode, attempted and actual provider/model, remote/published/held counts, latency, and failure state. Remote PUBLISH candidates can auto-publish after client quality validation; local fallback remains explicit but product-safe. Regeneration no longer deletes prior jobs/cards before replacement succeeds. Startup repairs legacy provenance and fails interrupted work safely. Source UI distinguishes Smart Generation, basic fallback, and failed refresh without exposing provider diagnostics.
 
-**Decisions:** production reuses benchmark-proven evaluation primitives without depending on benchmark experiment/reporting infrastructure. No paid provider calls, model changes, schema migration, immutable benchmark edits, or unrelated Workstream H configuration fixes.
+**Decisions:** preserve existing study cards across refresh failure; store diagnostics for backup/developer inspection but never show raw gateway/provider errors to learners; classify legacy rows conservatively; keep partial-remote continuation out of this patch. Expo public-config isolation now uses dynamic indexed environment access plus empty-string test isolation.
 
-**Validation:** 280 tests pass across Jest, benchmark/evaluation pytest, and gateway pytest; TypeScript passes. One pre-existing Expo environment inlining isolation test remains failing. Commands appear in section 14.
+**Validation:** TypeScript passes; all 28 Jest suites and 144 tests pass; all six mocked remote/fallback Playwright scenarios pass. `git diff --check` passes. Commands and teardown note appear in section 14.
 
-**Remaining:** native SQLite/device upload-to-offline-study E2E, durable deployment authority cache composition, broader authority coverage, and production deployment remain unverified. Workstream H owns deterministic Expo environment isolation.
+**Remaining:** native SQLite migration/device upload-to-offline-study E2E, bounded batch/continuation checkpoints, durable deployment authority cache composition, broader authority coverage, and production deployment remain unverified.
 
 ## 6. IMPORTANT ARCHITECTURAL DECISIONS
 
@@ -75,7 +75,7 @@ Barion is an offline-first medical and health-science study app. It imports lear
 
 - `AGENTS.md` — operating rules; Expo work requires exact v57 docs.
 - `app/` — Expo Router screens/shell.
-- `src/storage/database.ts` — schema v19, migrations/repairs, indexes, FTS.
+- `src/storage/database.ts` — schema v20, migrations/repairs, indexes, FTS.
 - `src/storage/repository.ts` — import, generation persistence, approval, study/review workflows.
 - `src/ingestion/` — readers, segmentation, extractive drafts, guides.
 - `src/ai/` — provider/config, prompts, validation, spans, evaluation, policy, sanitization, quality.
@@ -92,13 +92,13 @@ Barion is an offline-first medical and health-science study app. It imports lear
 
 ## 8. DATABASE / SCHEMA / MIGRATION STATE
 
-- Current `DATABASE_VERSION = 19`; initialization uses `PRAGMA user_version`, additive table creation, and column-repair helpers.
+- Current `DATABASE_VERSION = 20`; initialization uses `PRAGMA user_version`, additive table creation, and column-repair helpers.
 - Core tables: `decks`, `notes`, `cards`, `sources`, `source_segments`, `source_study_guides`, `card_evidence`, `generation_jobs`, `generated_candidates`, `review_events`, `memory_states`.
 - Additional state: profiles, card quality/learning, tests, courses/modules, study sessions/activity, short-term mastery, calendar blocks, games, trash, sync operations.
 - FSRS: `memory_states` stores initial/current serialized FSRS card, difficulty/stability/retrievability/due/version; `review_events` is append-only with reversible marker and session/mode metadata. Review writes are transactional.
-- Provenance/evaluation: source hash/local URI; segment locator/text/offsets; evidence/support status; candidate span/evaluation/original JSON, disposition, versions, sanitization reason; generation provider/model/prompt/request/token/fallback metadata.
+- Provenance/evaluation: source hash/local URI; segment locator/text/offsets; evidence/support status; candidate span/evaluation/original JSON, disposition, versions, sanitization reason; generation mode, attempted/actual provider and model, request IDs, candidate/publication counts, latency, and fallback/failure metadata.
 - Indexes cover active cards/decks, due memory, reviews, sources/segments, generation, learning state, tests, sessions, games, and calendar.
-- Migration v19 is additive; legacy candidates default `REVIEW` and `legacy`. No schema change occurred in final repair. Native migration/device performance validation remains pending.
+- Migration v20 is additive; legacy candidates default `REVIEW` and `legacy`, while legacy generation jobs are conservatively classified from persisted provider data. Native migration/device performance validation remains pending.
 
 ## 9. AI / PROVIDER / GATEWAY ARCHITECTURE
 
@@ -148,7 +148,7 @@ Supported by canonical local artifacts only:
 - Validated locally: Node `v22.22.2`, npm `10.9.7`, Python `3.12.10`, pytest `8.4.2`. CI pins Node `22.13.1`, Python `3.12`.
 - Expo `~57.0.23`; before Expo code changes, read exact `https://docs.expo.dev/versions/v57.0.0/` docs per `AGENTS.md`.
 - Install app with `npm ci`. Python CI installs `services/card_benchmark/requirements.txt`.
-- Gateway: `python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790` or `npm run gateway`.
+- Local development: `npm start` launches the AI gateway and Expo together; `npm run web` launches the gateway plus the cross-origin-isolated web proxy. Existing healthy gateway processes on port `8790` are reused. Separate-terminal option: `npm run gateway` plus `npm run start:expo`.
 - Environment names: `EXPO_PUBLIC_BARION_INGESTION_URL`, `EXPO_PUBLIC_BARION_AI_GATEWAY_URL`, `EXPO_PUBLIC_BARION_AI_MODEL`, local-only `EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`; `BARION_AI_AUTH_MODE`, `BARION_AI_GATEWAY_AUTH_TOKEN`, `SUPABASE_URL`, `BARION_AI_JWT_AUDIENCE`, `BARION_AI_MAX_ACCESS_TOKEN_LIFETIME_SECONDS`, `GEMINI_API_KEY`, `PRIMARY_GENERATION_PROVIDER`, `PRIMARY_GENERATION_MODEL`, `BARION_AI_ALLOWED_ORIGINS`, provider timeout/retry variables, request/input limits, `BARION_ALLOWED_ORIGINS`, `BARION_WEB_PORT`, `BARION_METRO_PORT`.
 - `.env` and gateway `.env` are ignored. Never place provider secrets in `EXPO_PUBLIC_*`.
 - No OmniRoute dependency/workflow was found. Do not assume it is required.
@@ -157,31 +157,29 @@ Supported by canonical local artifacts only:
 
 ### PASSING
 
-Run against final product-code state before handoff-only documentation/ignore changes:
+Run against current product-code state:
 
 - `npm run typecheck` — pass.
-- `npm test -- --runInBand` equivalent direct Jest run — 25 suites passed, 132 tests passed; one known configuration-isolation test failed.
+- `npm test -- --runInBand` — 28 suites passed, 144 tests passed.
+- `npm run test:e2e:ai-fallback` — six scenarios passed: one remote gateway path plus malformed output, provider failure, timeout, oversized request, and rate-limit fallback paths.
+- `git diff --check` — pass.
+
+Previously validated on current `HEAD`; Python code is unchanged by this follow-up:
+
 - `python -m pytest services/card_evaluation/tests services/card_benchmark/tests -q` — 102 passed.
 - `python -m pytest services/ai_gateway/tests -q` — 46 passed.
-
-Final checks after handoff/hygiene edits:
-
 - `python -m compileall -q services` — pass.
-- `git diff --check` — pass.
-- Full handoff re-read/repository cross-check — complete.
-
-Total executed tests: **280 passed, 1 known failure**.
 
 ### FAILING
 
-- `src/ai/__tests__/config.test.ts` — Expo statically inlined public environment values prevent runtime deletion from isolating optional gateway configuration. Existing Workstream H defect; unrelated to Workstream A.
+- No known TypeScript or Jest failures.
+- Playwright completed all six tests, but its Windows web-server teardown did not exit after completion and required interruption. Ports `8091` and `8092` were no longer listening afterward; test artifacts record a passed run.
 
 ### NOT RUN
 
-- Playwright E2E; requires running web/gateway setup and prior docs mark it pending.
 - Native iOS/Android builds, device tests, migration/performance tests, live malformed-file fuzzing.
 - Live Gemini, DailyMed, or paid SOL calls. Intentionally avoided.
-- Expo production bundle/build. Existing product code passed TypeScript/Jest; final edits were documentation/ignore only.
+- Expo production bundle/build.
 
 ## 15. KNOWN BUGS / LIMITATIONS / TECHNICAL DEBT
 
@@ -194,16 +192,17 @@ Total executed tests: **280 passed, 1 known failure**.
 - Canonical comparison has five shared concepts and no independent human review. Coverage is low and critical coverage zero.
 - Dataset registry values satisfy 64-character hash format; source fixture bytes are absent, so they cannot be independently recomputed here.
 - Older completion/setup docs contain stale counts, placeholders, and machine-specific `cd` examples. They are non-authoritative.
-- Worktree contains uncommitted Workstream A production-evaluation integration only; no commit was created during implementation.
+- Worktree contains uncommitted generation-resilience/provenance work plus local agent/test artifacts; no commit was created during this follow-up.
 
 ## 16. GIT STATE
 
 - Branch: `master`.
-- HEAD: `b7b9bebb16cf4fbaf8e3f77e1ec386605f932236` (accepted transition checkpoint).
-- Working tree: **not clean**. Current changes are Workstream A evaluator, gateway, TypeScript contract, persistence, review UX, deterministic tests, and documentation.
+- HEAD: `160e08e1516844e65d472194d60c3f7247cda73a` (`fix: harden AI evaluation and gateway correctness`), matching `origin/master`.
+- Working tree: **not clean**. Current changes are generation provenance/resilience, schema v20 repair, source UX, backup coverage, mocked browser E2E, tests, and documentation.
 - Staged files: none. No commit created.
-- Modified groups: source-review UI; gateway models/orchestration/validation; benchmark compatibility exports; shared evaluation policy/models; TypeScript evaluation/validation/policy; candidate persistence; tests/docs.
-- Untracked intended groups: shared evaluation implementation/fixtures/tests, gateway contract test, and mocked production evaluation flow test.
+- Modified groups: source detail UI; TypeScript generation contracts/config/quality; SQLite schema/repository/backup; AI tests; Playwright fallback tests; local full-stack startup; environment/deployment/handoff docs.
+- Untracked intended source/tests: `scripts/start-development.js`, `src/ai/generationExperience.ts`, `src/ai/__tests__/generationExperience.test.ts`, and `src/storage/__tests__/generationProvenance.test.ts`.
+- Untracked local-only directories: `.agents/`, `.codex/`, and `.tmp/`; do not add without deliberate review.
 - Ignored local-only items: root `.env`, `output/`, `dist/`, `.expo/`, `tmp/`, `services/ai_gateway/venv/`, `__pycache__`, `.pytest_cache`, `node_modules/`. Never stage them. Generated benchmark runs remain under ignored `tmp/card-benchmark/`.
 
 ## 17. AUTHORITATIVE SPECIFICATIONS
@@ -237,9 +236,9 @@ Older testing/setup/completion/telemetry notes may help historically but contain
 
 ## 19. NEXT RECOMMENDED IMPLEMENTATION TASK
 
-**Objective:** after Workstream A review/acceptance, begin Workstream B generation reliability and completeness.
+**Objective:** complete remaining Workstream B generation completeness with bounded batching, continuation, and durable checkpoints.
 
-**Why next:** production safety decisions now run end to end. Highest remaining production risk is rigid one-shot generation (`target=56`, `minimum=45`) that can discard recoverable partial progress or misrepresent completeness.
+**Why next:** current follow-up makes success, fallback, failure, and restart state truthful, but generation still uses one rigid remote request and cannot resume partial progress.
 
 **Expected scope:** reuse benchmark-proven batching/continuation primitives for bounded batches, stable IDs, persisted checkpoints, duplicate-safe merge, explicit completion states, and concept-aware gap continuation. Do not clone benchmark reporting infrastructure into production.
 
@@ -247,9 +246,9 @@ Older testing/setup/completion/telemetry notes may help historically but contain
 
 ## 20. CODEX TRANSITION NOTES
 
-- Start from uncommitted Workstream A worktree; do not reset, clean, or assume untracked evaluation files are disposable.
+- Start from uncommitted generation-resilience worktree; do not reset, clean, or assume untracked source/tests are disposable.
 - `tmp/` and `services/ai_gateway/venv/` are intentionally ignored; generated runs still exist locally as evidence, not commit inputs.
-- Transition checkpoint is `b7b9bebb...`; Workstream A changes remain uncommitted pending review.
+- Current committed checkpoint is `160e08e...`; generation-resilience changes remain uncommitted pending review.
 - Immutable benchmark runs remain untouched. Never fix generated reports in place.
 - Production app deploys shared evaluator logic end to end; remaining generation completeness, concept targeting, native offline validation, and authority breadth are separate follow-up workstreams.
 - `.env.example` uses `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, while `src/auth/supabaseClient.ts` reads `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Resolve deliberately during checkpoint review; never expose real values.

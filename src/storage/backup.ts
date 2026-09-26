@@ -16,7 +16,13 @@ import {
   type BarionBackupEnvelope,
   type BarionBackupPayload,
 } from '@/backup/format';
-import { DATABASE_VERSION, getDatabase, initializeDatabase, refreshSearchIndex } from '@/storage/database';
+import {
+  DATABASE_VERSION,
+  getDatabase,
+  initializeDatabase,
+  recoverInterruptedGenerationJobs,
+  refreshSearchIndex,
+} from '@/storage/database';
 
 export type OfflineDataSummary = {
   courseCount: number;
@@ -203,6 +209,7 @@ export async function restoreBarionBackup(serialized: string): Promise<RestoreRe
     );
   });
 
+  await recoverInterruptedGenerationJobs(db);
   await refreshSearchIndex();
   return { insertedCount, skippedCount, summary: inspected.summary };
 }

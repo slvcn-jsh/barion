@@ -1,4 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { Directory, File, Paths } from 'expo-file-system';
 import type * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 
@@ -11,10 +12,19 @@ import { readExpoPublicGatewayConfig } from '@/ai/config';
 import { asBarionAIError } from '@/ai/errors';
 import { createGatewayCardGenerationProvider } from '@/ai/gatewayProvider';
 import { createSupabaseAccessTokenProvider } from '@/auth/sessionProvider';
-import { generateGroundedCardsWithFallback } from '@/ai/generate';
+import {
+  generateGroundedCardsWithFallback,
+  LOCAL_MODEL_ID,
+  LOCAL_PROMPT_ID,
+  LOCAL_PROMPT_VERSION,
+  LOCAL_PROVIDER_ID,
+} from '@/ai/generate';
+import { GROUNDED_CARD_PROMPT } from '@/ai/prompts';
+import { runBatchedGeneration, type BatchMetadata } from '@/ai/batchGeneration';
 import { isAutoStudyEligible, type PublicationDisposition } from '@/ai/publicationPolicy';
-import type { GroundedCardCandidate } from '@/ai/types';
+import type { GenerationMode, GroundedCardCandidate, GroundedCardGenerationResult } from '@/ai/types';
 import { createId, nowIso } from '@/domain/ids';
+import { normalizeSourceStatus } from '@/domain/types';
 import {
   buildImportedCardsForRow,
   exportCardsToCsv,
@@ -23,6 +33,7 @@ import {
 } from '@/cards/importExport';
 import type {
   ActiveStudySession,
+  BariStoredMessage,
   ActiveTestSession,
   CandidateStatus,
   CourseModuleSummary,
@@ -61,6 +72,7 @@ import { AUTO_PUBLISH_QUALITY_SCORE, createExtractiveDrafts } from '@/ingestion/
 import { readSourceAsset } from '@/ingestion/readSource';
 import { segmentExtractedPages } from '@/ingestion/segmenter';
 import { createStudyGuide, type GeneratedStudyGuide } from '@/ingestion/studyGuide';
+import { extractConceptTargets, selectSegmentsForConcept } from '@/ingestion/concepts';
 import {
   SourceActionRequiredError,
   type ParsedSegment,
@@ -920,6 +932,13 @@ export async function getSources(): Promise<SourceItem[]> {
         FROM generated_candidates
         JOIN generation_jobs ON generation_jobs.id = generated_candidates.job_id
         WHERE generation_jobs.source_id = sources.id
+          AND generation_jobs.id = (
+            SELECT latest_generation_jobs.id
+            FROM generation_jobs AS latest_generation_jobs
+            WHERE latest_generation_jobs.source_id = sources.id
+            ORDER BY latest_generation_jobs.created_at DESC, latest_generation_jobs.rowid DESC
+            LIMIT 1
+          )
           AND generated_candidates.status = 'pending'
       ) AS draftCount
       ,(
@@ -1007,6 +1026,13 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
         FROM generated_candidates
         JOIN generation_jobs ON generation_jobs.id = generated_candidates.job_id
         WHERE generation_jobs.source_id = sources.id
+          AND generation_jobs.id = (
+            SELECT latest_generation_jobs.id
+            FROM generation_jobs AS latest_generation_jobs
+            WHERE latest_generation_jobs.source_id = sources.id
+            ORDER BY latest_generation_jobs.created_at DESC, latest_generation_jobs.rowid DESC
+            LIMIT 1
+          )
           AND generated_candidates.status = 'pending'
       ) AS draftCount
       ,(
@@ -1087,14 +1113,17 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
     sourceId,
   );
 
-  const generationJob = await db.getFirstAsync<GenerationJobSummary>(
+  const generationJobRow = await db.getFirstAsync<GenerationJobSummary>(
     `
     SELECT
       id,
       status,
       summary,
+      generation_mode AS generationMode,
       provider_id AS providerId,
       model_id AS modelId,
+      attempted_provider_id AS attemptedProviderId,
+      attempted_model_id AS attemptedModelId,
       prompt_id AS promptId,
       prompt_version AS promptVersion,
       request_id AS requestId,
@@ -1102,15 +1131,33 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       input_tokens AS inputTokens,
       output_tokens AS outputTokens,
       fallback_reason AS fallbackReason,
+      fallback_used AS fallbackUsed,
+      failure_reason AS failureReason,
+      remote_candidate_count AS remoteCandidateCount,
+      published_card_count AS publishedCardCount,
+      held_candidate_count AS heldCandidateCount,
+      duration_ms AS durationMs,
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM generation_jobs
     WHERE source_id = ?
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, rowid DESC
     LIMIT 1
     `,
     sourceId,
   );
+  const generationJob = generationJobRow
+    ? {
+        ...generationJobRow,
+        fallbackUsed: Boolean(generationJobRow.fallbackUsed),
+        remoteCandidateCount: Number(generationJobRow.remoteCandidateCount ?? 0),
+        publishedCardCount: Number(generationJobRow.publishedCardCount ?? 0),
+        heldCandidateCount: Number(generationJobRow.heldCandidateCount ?? 0),
+        durationMs: generationJobRow.durationMs === null || generationJobRow.durationMs === undefined
+          ? null
+          : Number(generationJobRow.durationMs),
+      }
+    : undefined;
 
   const candidates = await db.getAllAsync<GeneratedCandidate>(
     `
@@ -1140,6 +1187,7 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
     FROM generated_candidates
     JOIN generation_jobs ON generation_jobs.id = generated_candidates.job_id
     WHERE generation_jobs.source_id = ?
+      AND generation_jobs.id = ?
     ORDER BY
       CASE generated_candidates.status
         WHEN 'pending' THEN 0
@@ -1149,6 +1197,7 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       generated_candidates.created_at ASC
     `,
     sourceId,
+    generationJobRow?.id ?? '',
   );
 
   const guideRow = await db.getFirstAsync<SourceStudyGuideRow>(
@@ -1183,7 +1232,7 @@ export async function getSourceDetail(sourceId: string): Promise<SourceDetail | 
       qualityScore: Number(candidate.qualityScore ?? 0),
       supportScore: Number(candidate.supportScore ?? 0),
     })),
-    generationJob: generationJob ?? undefined,
+    generationJob,
     studyGuide,
   };
 }
@@ -1532,23 +1581,7 @@ export async function restoreTrashItem(trashId: string) {
   return true;
 }
 
-export async function importSourceFromPicker() {
-  const picked = await DocumentPicker.getDocumentAsync({
-    base64: false,
-    copyToCacheDirectory: true,
-    multiple: false,
-    type: [
-      'application/pdf',
-      'text/plain',
-      'text/markdown',
-    ],
-  });
-
-  if (picked.canceled || !picked.assets[0]) {
-    return null;
-  }
-
-  const asset = picked.assets[0];
+async function importSourceAsset(asset: SourceAssetInput, customTitle?: string) {
   if (asset.size && asset.size > 30 * 1024 * 1024) {
     throw new Error('This file is larger than 30 MB. Split it into a focused chapter and try again.');
   }
@@ -1556,15 +1589,8 @@ export async function importSourceFromPicker() {
   const db = await getDatabase();
   const sourceId = createId('src');
   const deckId = createId('deck');
-  const sourceTitle = asset.name.replace(/\.[^/.]+$/, '').trim() || 'Imported study set';
-  const sourceAsset: SourceAssetInput = {
-    name: asset.name,
-    uri: asset.uri,
-    mimeType: asset.mimeType,
-    size: asset.size,
-    file: asset.file,
-  };
-  const stored = await persistImportedSource(sourceId, sourceAsset);
+  const sourceTitle = customTitle || asset.name.replace(/\.[^/.]+$/, '').trim() || 'Imported study set';
+  const stored = await persistImportedSource(sourceId, asset);
 
   const existing = await db.getFirstAsync<{ id: string; localUri: string; status: string }>(
     `SELECT id, local_uri AS localUri, status
@@ -1585,7 +1611,7 @@ export async function importSourceFromPicker() {
         stored.sizeBytes,
         existing.id,
       );
-      await processSource(existing.id, { ...sourceAsset, uri: stored.localUri });
+      await processSource(existing.id, { ...asset, uri: stored.localUri });
     } else {
       discardPersistedSource(stored.localUri);
     }
@@ -1637,11 +1663,76 @@ export async function importSourceFromPicker() {
   });
 
   await processSource(sourceId, {
-    ...sourceAsset,
+    ...asset,
     uri: stored.localUri,
   });
 
   return { sourceId, duplicate: false };
+}
+
+export async function importSourceFromPicker(allowedTypes?: ('pdf' | 'text')[]) {
+  const mimeTypes = allowedTypes?.includes('pdf') && !allowedTypes?.includes('text')
+    ? ['application/pdf']
+    : allowedTypes?.includes('text') && !allowedTypes?.includes('pdf')
+      ? ['text/plain', 'text/markdown']
+      : ['application/pdf', 'text/plain', 'text/markdown'];
+
+  const picked = await DocumentPicker.getDocumentAsync({
+    base64: false,
+    copyToCacheDirectory: true,
+    multiple: false,
+    type: mimeTypes,
+  });
+
+  if (picked.canceled || !picked.assets[0]) {
+    return null;
+  }
+
+  const asset = picked.assets[0];
+  return importSourceAsset({
+    name: asset.name,
+    uri: asset.uri,
+    mimeType: asset.mimeType,
+    size: asset.size,
+    file: asset.file,
+  });
+}
+
+export async function importSourceFromText(title: string, text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error('Please enter or paste study notes.');
+  }
+
+  const cleanTitle = title.trim() || 'Pasted notes';
+  const safeFilename = cleanTitle.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'notes';
+  const filename = `${safeFilename}.txt`;
+
+  let asset: SourceAssetInput;
+  if (Platform.OS === 'web') {
+    const blob = new Blob([trimmed], { type: 'text/plain;charset=utf-8' });
+    asset = {
+      name: filename,
+      uri: `data:text/plain;charset=utf-8,${encodeURIComponent(trimmed)}`,
+      mimeType: 'text/plain',
+      size: blob.size,
+      file: blob,
+    };
+  } else {
+    const directory = new Directory(Paths.cache, 'medstudy-imports');
+    directory.create({ idempotent: true, intermediates: true });
+    const tempFile = new File(directory, `${createId('note')}-${filename}`);
+    tempFile.create();
+    tempFile.write(trimmed);
+    asset = {
+      name: filename,
+      uri: tempFile.uri,
+      mimeType: 'text/plain',
+      size: tempFile.size ?? trimmed.length,
+    };
+  }
+
+  return importSourceAsset(asset, cleanTitle);
 }
 
 export async function retrySourceProcessing(sourceId: string) {
@@ -1744,6 +1835,11 @@ export async function generateDraftsForSource(sourceId: string) {
   const profile = await getStudyProfile();
   const studyGuide = createStudyGuide(rows, source.title);
   const requestId = createId('generation-request');
+  const conceptTargets = extractConceptTargets(rows);
+  const conceptAwareSegments = buildConceptFirstSegments(rows, conceptTargets);
+  const jobId = createId('job');
+  const startedAt = nowIso();
+  const startedAtMs = Date.now();
   let gatewayConfigError: string | undefined;
   let provider = null;
   try {
@@ -1755,147 +1851,394 @@ export async function generateDraftsForSource(sourceId: string) {
     gatewayConfigError = asBarionAIError(error).code;
   }
 
-  const generation = await generateGroundedCardsWithFallback(
-    provider,
-    {
-      requestId,
-      sourceId,
-      sourceTitle: source.title,
-      maxCandidates: 56,
-      segments: rows.map((row) => ({
-        segmentId: row.id,
-        locator: row.locator,
-        sectionPath: row.sectionPath,
-        text: row.text,
-      })),
-    },
-    () => createExtractiveDrafts(rows, {
-      reviewStyle: profile.reviewStyle,
-      difficulty: profile.difficulty,
-      examGoal: profile.examGoal,
-    }),
-    undefined,
-    gatewayConfigError,
-  );
-  const drafts = generation.candidates;
-  const localGeneration = generation.provenance.providerId === 'local-extractive';
-  const now = nowIso();
-  const jobId = createId('job');
-  const candidateIds: string[] = [];
-
+  const initialProviderId = provider?.id ?? LOCAL_PROVIDER_ID;
+  const initialModelId = provider?.model ?? LOCAL_MODEL_ID;
+  const initialPromptId = provider ? GROUNDED_CARD_PROMPT.id : LOCAL_PROMPT_ID;
+  const initialPromptVersion = provider ? GROUNDED_CARD_PROMPT.version : LOCAL_PROMPT_VERSION;
+  const initialFallbackReason = gatewayConfigError ?? (provider ? null : 'gateway_not_configured');
   await runWriteTransaction(db, async (txn) => {
+    const activeJob = await txn.getFirstAsync<{ id: string }>(
+      `SELECT id
+       FROM generation_jobs
+       WHERE source_id = ? AND status IN ('running', 'publishing')
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`,
+      sourceId,
+    );
+    if (activeJob) {
+      throw new Error('Deck preparation is already running.');
+    }
     await txn.runAsync("UPDATE sources SET status = 'generating', ingestion_error = NULL WHERE id = ?", sourceId);
-    await txn.runAsync('DELETE FROM generation_jobs WHERE source_id = ?', sourceId);
-    await upsertSourceStudyGuide(txn, sourceId, studyGuide, now);
     await txn.runAsync(
       `INSERT INTO generation_jobs
-       (id, source_id, deck_id, status, summary, provider_id, model_id, prompt_id, prompt_version,
-        request_id, provider_request_id, input_tokens, output_tokens, fallback_reason, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, source_id, deck_id, status, summary, generation_mode, provider_id, model_id,
+        attempted_provider_id, attempted_model_id, prompt_id, prompt_version, request_id,
+        remote_candidate_count, published_card_count, held_candidate_count, duration_ms,
+        fallback_reason, fallback_used, failure_reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       jobId,
       sourceId,
       source.defaultDeckId,
-      drafts.length ? 'publishing' : 'completed',
-      drafts.length
-        ? `Checking ${drafts.length} source-grounded drafts against Barion's quality gate.`
-        : 'The source was extracted, but it did not contain enough readable prose for study cards.',
-      generation.provenance.providerId,
-      generation.provenance.modelId,
-      generation.provenance.promptId,
-      generation.provenance.promptVersion,
-      generation.provenance.requestId,
-      generation.provenance.providerRequestId ?? null,
-      generation.provenance.usage?.inputTokens ?? null,
-      generation.provenance.usage?.outputTokens ?? null,
-      generation.provenance.fallbackReason ?? null,
-      now,
-      now,
-    );
-
-    for (const draft of drafts) {
-      const candidateId = createId('candidate');
-      const qualityScore = localGeneration ? draftQuality(draft) : evaluateGatewayCardQuality(draft);
-      const qualityNotes = localGeneration
-        ? draftQualityNotes(draft)
-        : describeGatewayCardQuality(draft, qualityScore);
-      if (draft.evaluation && isAutoStudyEligible(draft.evaluation.publicationDisposition)
-          && shouldAutoPublishCandidate(qualityScore, localGeneration, AUTO_PUBLISH_QUALITY_SCORE)) {
-        candidateIds.push(candidateId);
-      }
-      const originalCandidate = draft.evaluation?.originalCandidate ?? {
-        segmentId: draft.segmentId,
-        locator: draft.locator,
-        cardType: draft.cardType,
-        question: draft.question,
-        answer: draft.answer,
-        learningObjective: draft.learningObjective,
-        evidenceText: draft.evidenceText,
-        evidenceSpan: draft.evidenceSpan,
-      };
-      const verificationStatus = candidateVerificationStatus(draft, localGeneration);
-      const supportScore = candidateSupportScore(draft);
-      await txn.runAsync(
-        `INSERT INTO generated_candidates
-         (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, evidence_span_json, evaluation_json, original_candidate_json, publication_disposition, evaluation_version, policy_version, sanitization_reason, verification_status, support_score, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        candidateId,
-        jobId,
-        draft.segmentId,
-        draft.cardType,
-        draft.learningObjective,
-        qualityScore,
-        qualityNotes,
-        draft.question,
-        draft.answer,
-        draft.evidenceText,
-        draft.locator,
-        draft.evidenceSpan ? JSON.stringify(draft.evidenceSpan) : null,
-        draft.evaluation ? JSON.stringify(draft.evaluation) : null,
-        JSON.stringify(originalCandidate),
-        draft.evaluation?.publicationDisposition ?? 'REVIEW',
-        draft.evaluation?.evaluationVersion ?? 'legacy',
-        draft.evaluation?.policyVersion ?? 'legacy',
-        draft.evaluation?.sanitization?.reason ?? null,
-        verificationStatus,
-        supportScore,
-        'pending',
-        now,
-      );
-    }
-
-    await txn.runAsync(
-      `UPDATE sources SET status = ?, ingestion_error = NULL WHERE id = ?`,
-      drafts.length ? 'generating' : 'ready',
-      sourceId,
+      'running',
+      'Preparing source-grounded study cards.',
+      null,
+      initialProviderId,
+      initialModelId,
+      provider?.id ?? null,
+      provider?.model ?? null,
+      initialPromptId,
+      initialPromptVersion,
+      requestId,
+      0,
+      0,
+      0,
+      0,
+      initialFallbackReason,
+      0,
+      null,
+      startedAt,
+      startedAt,
     );
   });
 
-  for (const candidateId of candidateIds) {
-    await approveCandidate(candidateId, source.defaultDeckId, true);
+  let batchGenerationResult: Awaited<ReturnType<typeof runBatchedGeneration>>;
+  try {
+    batchGenerationResult = await runBatchedGeneration(
+      provider,
+      requestId,
+      sourceId,
+      source.title,
+      conceptTargets,
+      conceptAwareSegments,
+      () => createExtractiveDrafts(rows, {
+        reviewStyle: profile.reviewStyle,
+        difficulty: profile.difficulty,
+        examGoal: profile.examGoal,
+      }),
+      {
+        onBatchComplete: async () => {
+          // checkpointing happens in runBatchedGeneration in a non-persistent way for now.
+        },
+      },
+    );
+  } catch (error) {
+    const failure = asBarionAIError(error);
+    const completedAt = nowIso();
+    await markGenerationJobFailed(db, jobId, sourceId, failure.code, startedAtMs, completedAt);
+    logGenerationDiagnostics({
+      requestId,
+      generationMode: 'FAILED',
+      fallbackUsed: false,
+      providerId: initialProviderId,
+      modelId: initialModelId,
+      attemptedProviderId: provider?.id ?? null,
+      attemptedModelId: provider?.model ?? null,
+      providerRequestId: null,
+      fallbackReason: null,
+      failureReason: failure.code,
+      remoteCandidateCount: 0,
+      publishedCardCount: 0,
+      heldCandidateCount: 0,
+      durationMs: Date.now() - startedAtMs,
+    });
+    throw error;
   }
-  await resolveRegeneratedCardTrash(db, sourceId);
 
-  if (drafts.length) {
-    const attentionCount = drafts.length - candidateIds.length;
+  const drafts = batchGenerationResult.allCandidates;
+  const localGeneration = batchGenerationResult.coverage.remoteAIUsed === false;
+  const batchMetadata: BatchMetadata = batchGenerationResult.batchMetadata;
+  const now = nowIso();
+  const candidateIds: string[] = [];
+  let publishedCardCount = 0;
+
+  try {
     await runWriteTransaction(db, async (txn) => {
+      await upsertSourceStudyGuide(txn, sourceId, studyGuide, now);
       await txn.runAsync(
-        `UPDATE generation_jobs SET status = ?, summary = ?, updated_at = ? WHERE id = ?`,
-        attentionCount ? 'awaiting-review' : 'completed',
-        attentionCount
-          ? `${candidateIds.length} strong drafts published automatically; ${attentionCount} held for source review.`
-          : `${candidateIds.length} strong source-grounded cards published automatically.`,
-        nowIso(),
+        `UPDATE generation_jobs
+         SET status = ?, summary = ?, generation_mode = ?, provider_id = ?, model_id = ?,
+             attempted_provider_id = ?, attempted_model_id = ?, prompt_id = ?, prompt_version = ?,
+             provider_request_id = ?, input_tokens = ?, output_tokens = ?, fallback_reason = ?, fallback_used = ?,
+             remote_candidate_count = ?, published_card_count = 0, held_candidate_count = ?,
+             duration_ms = ?, failure_reason = ?, batch_metadata_json = ?, updated_at = ?
+         WHERE id = ?`,
+        drafts.length ? 'publishing' : 'failed',
+        drafts.length
+          ? `Checking ${drafts.length} source-grounded drafts against Barion's quality gate.`
+          : 'Barion could not create usable study cards from this material.',
+        drafts.length ? (localGeneration ? 'LOCAL_FALLBACK' : 'REMOTE_AI') : 'FAILED',
+        initialProviderId,
+        initialModelId,
+        provider?.id ?? null,
+        provider?.model ?? null,
+        provider ? GROUNDED_CARD_PROMPT.id : LOCAL_PROMPT_ID,
+        provider ? GROUNDED_CARD_PROMPT.version : LOCAL_PROMPT_VERSION,
+        null,
+        null,
+        null,
+        batchGenerationResult.coverage.anyFallback ? 'fallback_activated' : null,
+        batchGenerationResult.coverage.anyFallback ? 1 : 0,
+        drafts.length,
+        drafts.length,
+        Date.now() - startedAtMs,
+        drafts.length ? null : 'no_usable_candidates',
+        JSON.stringify(batchMetadata),
+        now,
         jobId,
       );
+
+      for (const draft of drafts) {
+        const candidateId = createId('candidate');
+        const qualityScore = localGeneration ? draftQuality(draft) : evaluateGatewayCardQuality(draft);
+        const qualityNotes = localGeneration
+          ? draftQualityNotes(draft)
+          : describeGatewayCardQuality(draft, qualityScore);
+        if (draft.evaluation && isAutoStudyEligible(draft.evaluation.publicationDisposition)
+            && shouldAutoPublishCandidate(qualityScore, localGeneration, AUTO_PUBLISH_QUALITY_SCORE)) {
+          candidateIds.push(candidateId);
+        }
+        const originalCandidate = draft.evaluation?.originalCandidate ?? {
+          segmentId: draft.segmentId,
+          locator: draft.locator,
+          cardType: draft.cardType,
+          question: draft.question,
+          answer: draft.answer,
+          learningObjective: draft.learningObjective,
+          evidenceText: draft.evidenceText,
+          evidenceSpan: draft.evidenceSpan,
+        };
+        const verificationStatus = candidateVerificationStatus(draft, localGeneration);
+        const supportScore = candidateSupportScore(draft);
+        await txn.runAsync(
+          `INSERT INTO generated_candidates
+           (id, job_id, segment_id, card_type, learning_objective, quality_score, quality_notes, question, answer, evidence_text, locator, evidence_span_json, evaluation_json, original_candidate_json, publication_disposition, evaluation_version, policy_version, sanitization_reason, verification_status, support_score, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          candidateId,
+          jobId,
+          draft.segmentId,
+          draft.cardType,
+          draft.learningObjective,
+          qualityScore,
+          qualityNotes,
+          draft.question,
+          draft.answer,
+          draft.evidenceText,
+          draft.locator,
+          draft.evidenceSpan ? JSON.stringify(draft.evidenceSpan) : null,
+          draft.evaluation ? JSON.stringify(draft.evaluation) : null,
+          JSON.stringify(originalCandidate),
+          draft.evaluation?.publicationDisposition ?? 'REVIEW',
+          draft.evaluation?.evaluationVersion ?? 'legacy',
+          draft.evaluation?.policyVersion ?? 'legacy',
+          draft.evaluation?.sanitization?.reason ?? null,
+          verificationStatus,
+          supportScore,
+          'pending',
+          now,
+        );
+      }
+
       await txn.runAsync(
-        `UPDATE sources SET status = ?, ingestion_error = NULL WHERE id = ?`,
-        attentionCount ? 'review-ready' : 'ready',
+        `UPDATE sources SET status = ?, ingestion_error = ? WHERE id = ?`,
+        drafts.length ? 'generating' : 'failed',
+        drafts.length ? null : 'Barion could not create usable study cards from this material. Your existing cards remain available.',
         sourceId,
       );
     });
+
+    if (!drafts.length) {
+      logGenerationDiagnostics({
+        requestId,
+        generationMode: 'FAILED',
+        fallbackUsed: batchGenerationResult.coverage.anyFallback,
+        providerId: initialProviderId,
+        modelId: initialModelId,
+        attemptedProviderId: provider?.id ?? null,
+        attemptedModelId: provider?.model ?? null,
+        providerRequestId: null,
+        fallbackReason: null,
+        failureReason: 'no_usable_candidates',
+        remoteCandidateCount: 0,
+        publishedCardCount: 0,
+        heldCandidateCount: 0,
+        durationMs: Date.now() - startedAtMs,
+      });
+      return 0;
+    }
+
+    const attentionCount = drafts.length - candidateIds.length;
+    await runWriteTransaction(db, async (txn) => {
+      const latestJob = await txn.getFirstAsync<{ id: string }>(
+        `SELECT id
+         FROM generation_jobs
+         WHERE source_id = ?
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1`,
+        sourceId,
+      );
+      if (latestJob?.id !== jobId) {
+        throw new Error('A newer deck preparation replaced this request.');
+      }
+
+      for (const candidateId of candidateIds) {
+        await approveCandidateUsingDatabase(
+          txn,
+          candidateId,
+          source.defaultDeckId!,
+          true,
+          true,
+          false,
+        );
+      }
+      publishedCardCount = await generationCandidateCount(txn, jobId, 'approved');
+      await resolveRegeneratedCardTrash(txn, sourceId);
+
+      if (drafts.length) {
+        await txn.runAsync(
+          `UPDATE generation_jobs
+           SET status = ?, summary = ?, published_card_count = ?, held_candidate_count = ?, updated_at = ?
+           WHERE id = ?`,
+          attentionCount ? 'awaiting-review' : 'completed',
+          attentionCount
+            ? `${publishedCardCount} strong cards published automatically; ${attentionCount} held for source review.`
+            : `${publishedCardCount} strong source-grounded cards published automatically.`,
+          publishedCardCount,
+          attentionCount,
+          nowIso(),
+          jobId,
+        );
+        await txn.runAsync(
+          `UPDATE sources SET status = ?, ingestion_error = NULL WHERE id = ?`,
+          attentionCount ? 'review-ready' : 'ready',
+          sourceId,
+        );
+      }
+    });
+  } catch (error) {
+    const failure = asBarionAIError(error);
+    const completedAt = nowIso();
+    await markGenerationJobFailed(db, jobId, sourceId, failure.code, startedAtMs, completedAt);
+    logGenerationDiagnostics({
+      requestId,
+      generationMode: 'FAILED',
+      fallbackUsed: false,
+      providerId: initialProviderId,
+      modelId: initialModelId,
+      attemptedProviderId: provider?.id ?? null,
+      attemptedModelId: provider?.model ?? null,
+      providerRequestId: null,
+      fallbackReason: null,
+      failureReason: failure.code,
+      remoteCandidateCount: 0,
+      publishedCardCount: await generationCandidateCount(db, jobId, 'approved'),
+      heldCandidateCount: await generationCandidateCount(db, jobId, 'held'),
+      durationMs: Date.now() - startedAtMs,
+    });
+    throw error;
   }
 
+  logGenerationDiagnostics({
+    requestId,
+    generationMode: localGeneration ? 'LOCAL_FALLBACK' : 'REMOTE_AI',
+    fallbackUsed: batchGenerationResult.coverage.anyFallback,
+    providerId: initialProviderId,
+    modelId: initialModelId,
+    attemptedProviderId: provider?.id ?? null,
+    attemptedModelId: provider?.model ?? null,
+    providerRequestId: null,
+    fallbackReason: batchGenerationResult.coverage.anyFallback ? 'fallback_activated' : null,
+    failureReason: null,
+    remoteCandidateCount: batchGenerationResult.coverage.totalCandidates,
+    publishedCardCount,
+    heldCandidateCount: drafts.length - candidateIds.length,
+    durationMs: Date.now() - startedAtMs,
+  });
+
   return drafts.length;
+}
+
+type GenerationDiagnostic = {
+  requestId: string;
+  generationMode: GenerationMode;
+  fallbackUsed: boolean;
+  providerId: string;
+  modelId: string;
+  attemptedProviderId: string | null;
+  attemptedModelId: string | null;
+  providerRequestId: string | null;
+  fallbackReason: string | null;
+  failureReason: string | null;
+  remoteCandidateCount: number;
+  publishedCardCount: number;
+  heldCandidateCount: number;
+  durationMs: number;
+};
+
+function logGenerationDiagnostics(diagnostic: GenerationDiagnostic) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.info('barion.ai.generation', diagnostic);
+}
+
+async function generationCandidateCount(
+  db: WritableDatabase,
+  jobId: string,
+  kind: 'approved' | 'held',
+) {
+  const countExpression = kind === 'approved'
+    ? "COUNT(DISTINCT COALESCE(published_card_id, id))"
+    : 'COUNT(*)';
+  const statusClause = kind === 'approved' ? "status = 'approved'" : "status <> 'approved'";
+  const result = await db.getFirstAsync<CountRow>(
+    `SELECT ${countExpression} AS count FROM generated_candidates WHERE job_id = ? AND ${statusClause}`,
+    jobId,
+  );
+  return Number(result?.count ?? 0);
+}
+
+async function markGenerationJobFailed(
+  db: WritableDatabase,
+  jobId: string,
+  sourceId: string,
+  failureReason: string,
+  startedAtMs: number,
+  completedAt: string,
+) {
+  const publishedCardCount = await generationCandidateCount(db, jobId, 'approved');
+  const heldCandidateCount = await generationCandidateCount(db, jobId, 'held');
+  const durationMs = Math.max(0, Date.now() - startedAtMs);
+
+  await runWriteTransaction(db, async (txn) => {
+    await txn.runAsync(
+      `UPDATE generation_jobs
+       SET status = 'failed', generation_mode = 'FAILED',
+           summary = 'Deck preparation did not finish. Existing cards remain available.',
+           published_card_count = ?, held_candidate_count = ?, duration_ms = ?,
+           failure_reason = ?, updated_at = ?
+       WHERE id = ?`,
+      publishedCardCount,
+      heldCandidateCount,
+      durationMs,
+      failureReason,
+      completedAt,
+      jobId,
+    );
+    await txn.runAsync(
+      `UPDATE sources
+       SET status = 'failed',
+           ingestion_error = 'Deck preparation did not finish. Your existing cards are still available. Try again.'
+       WHERE id = ?
+         AND ? = (
+           SELECT latest_generation_jobs.id
+           FROM generation_jobs AS latest_generation_jobs
+           WHERE latest_generation_jobs.source_id = ?
+           ORDER BY latest_generation_jobs.created_at DESC, latest_generation_jobs.rowid DESC
+           LIMIT 1
+         )`,
+      sourceId,
+      jobId,
+      sourceId,
+    );
+  });
 }
 
 function draftQuality(draft: GroundedCardCandidate) {
@@ -1928,6 +2271,17 @@ function candidateSupportScore(draft: GroundedCardCandidate) {
 
 export async function approveCandidate(candidateId: string, deckId?: string, automated = false) {
   const db = await getDatabase();
+  return approveCandidateUsingDatabase(db, candidateId, deckId, automated);
+}
+
+async function approveCandidateUsingDatabase(
+  db: WritableDatabase,
+  candidateId: string,
+  deckId?: string,
+  automated = false,
+  alreadyInTransaction = false,
+  finalizeReview = true,
+) {
   const candidate = await db.getFirstAsync<{
     id: string;
     jobId: string;
@@ -2005,7 +2359,7 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
       : 'policy-published'
     : 'user-approved-held-candidate';
 
-  await runWriteTransaction(db, async (txn) => {
+  const persistCandidate = async (txn: WritableDatabase) => {
     const existingCard = await txn.getFirstAsync<{ id: string; noteId: string; deletedAt: string | null }>(
       `SELECT cards.id, cards.note_id AS noteId, cards.deleted_at AS deletedAt
        FROM cards
@@ -2046,8 +2400,14 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
         await upsertSearchIndex(txn, existingCard.id);
       }
       await upsertCardQuality(txn, resolvedCardId, candidate, now);
-      await txn.runAsync("UPDATE generated_candidates SET status = 'approved' WHERE id = ?", candidateId);
-      await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
+      await txn.runAsync(
+        "UPDATE generated_candidates SET status = 'approved', published_card_id = ? WHERE id = ?",
+        resolvedCardId,
+        candidateId,
+      );
+      if (finalizeReview) {
+        await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
+      }
       return;
     }
 
@@ -2126,10 +2486,16 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
         replaceableCard.evidenceId,
       );
       await upsertCardQuality(txn, resolvedCardId, candidate, now);
-      await txn.runAsync("UPDATE generated_candidates SET status = 'approved' WHERE id = ?", candidateId);
+      await txn.runAsync(
+        "UPDATE generated_candidates SET status = 'approved', published_card_id = ? WHERE id = ?",
+        resolvedCardId,
+        candidateId,
+      );
       await txn.runAsync('UPDATE decks SET updated_at = ? WHERE id = ?', now, targetDeckId);
       await upsertSearchIndex(txn, replaceableCard.id);
-      await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
+      if (finalizeReview) {
+        await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
+      }
       return;
     }
 
@@ -2186,11 +2552,23 @@ export async function approveCandidate(candidateId: string, deckId?: string, aut
       now,
     );
     await upsertCardQuality(txn, cardId, candidate, now);
-    await txn.runAsync("UPDATE generated_candidates SET status = 'approved' WHERE id = ?", candidateId);
+    await txn.runAsync(
+      "UPDATE generated_candidates SET status = 'approved', published_card_id = ? WHERE id = ?",
+      resolvedCardId,
+      candidateId,
+    );
     await txn.runAsync('UPDATE decks SET updated_at = ? WHERE id = ?', now, targetDeckId);
     await upsertSearchIndex(txn, cardId);
-    await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
-  });
+    if (finalizeReview) {
+      await finalizeCandidateReview(txn, candidate.jobId, candidate.sourceId, now);
+    }
+  };
+
+  if (alreadyInTransaction) {
+    await persistCandidate(db);
+  } else {
+    await runWriteTransaction(db, persistCandidate);
+  }
 
   return resolvedCardId;
 }
@@ -3807,6 +4185,7 @@ function parseGuideArray<T>(serialized: string): T[] {
 
 async function processSource(sourceId: string, asset: SourceAssetInput) {
   const db = await getDatabase();
+  let generationStarted = false;
   const source = await db.getFirstAsync<{ title: string }>(
     'SELECT title FROM sources WHERE id = ? AND deleted_at IS NULL AND archived_at IS NULL',
     sourceId,
@@ -3832,7 +4211,6 @@ async function processSource(sourceId: string, asset: SourceAssetInput) {
     const processedAt = nowIso();
     const studyGuide = createStudyGuide(segments, source.title);
     await runWriteTransaction(db, async (txn) => {
-      await txn.runAsync('DELETE FROM generation_jobs WHERE source_id = ?', sourceId);
       await txn.runAsync('DELETE FROM source_segments WHERE source_id = ?', sourceId);
 
       for (const segment of segments) {
@@ -3862,11 +4240,14 @@ async function processSource(sourceId: string, asset: SourceAssetInput) {
       );
     });
 
+    generationStarted = true;
     const draftCount = await generateDraftsForSource(sourceId);
     return { segmentCount: segments.length, draftCount };
   } catch (error) {
     const status = error instanceof SourceActionRequiredError ? 'action-required' : 'failed';
-    const message = error instanceof Error ? error.message : 'Barion could not process this source.';
+    const message = generationStarted
+      ? 'Deck preparation did not finish. Your existing cards are still available. Try again.'
+      : error instanceof Error ? error.message : 'Barion could not process this source.';
     await db.runAsync(
       'UPDATE sources SET status = ?, ingestion_error = ? WHERE id = ?',
       status,
@@ -3880,6 +4261,7 @@ async function processSource(sourceId: string, asset: SourceAssetInput) {
 function hydrateSource(source: SourceItem): SourceItem {
   return {
     ...source,
+    status: normalizeSourceStatus(source.status),
     segmentCount: Number(source.segmentCount ?? 0),
     draftCount: Number(source.draftCount ?? 0),
     sourceCardCount: Number(source.sourceCardCount ?? 0),
@@ -4031,20 +4413,62 @@ async function finalizeCandidateReview(
   sourceId: string,
   updatedAt: string,
 ) {
-  const pending = await db.getFirstAsync<CountRow>(
-    "SELECT COUNT(*) AS count FROM generated_candidates WHERE job_id = ? AND status = 'pending'",
+  const counts = await db.getFirstAsync<{
+    pendingCount: number;
+    publishedCardCount: number;
+    heldCandidateCount: number;
+  }>(
+    `SELECT
+       SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pendingCount,
+       COUNT(DISTINCT CASE
+         WHEN status = 'approved' THEN COALESCE(published_card_id, id)
+         ELSE NULL
+       END) AS publishedCardCount,
+       SUM(CASE WHEN status <> 'approved' THEN 1 ELSE 0 END) AS heldCandidateCount
+     FROM generated_candidates
+     WHERE job_id = ?`,
     jobId,
   );
+  const pendingCount = Number(counts?.pendingCount ?? 0);
+  const publishedCardCount = Number(counts?.publishedCardCount ?? 0);
+  const heldCandidateCount = Number(counts?.heldCandidateCount ?? 0);
 
-  if (Number(pending?.count ?? 0) === 0) {
+  if (pendingCount === 0) {
     await db.runAsync(
-      "UPDATE generation_jobs SET status = 'completed', summary = 'All source drafts have been reviewed.', updated_at = ? WHERE id = ?",
+      `UPDATE generation_jobs
+       SET status = 'completed', summary = 'All source drafts have been reviewed.',
+           published_card_count = ?, held_candidate_count = ?, updated_at = ?
+       WHERE id = ?`,
+      publishedCardCount,
+      heldCandidateCount,
       updatedAt,
       jobId,
     );
-    await db.runAsync("UPDATE sources SET status = 'ready' WHERE id = ?", sourceId);
+    await db.runAsync(
+      `UPDATE sources
+       SET status = 'ready'
+       WHERE id = ?
+         AND ? = (
+           SELECT latest_generation_jobs.id
+           FROM generation_jobs AS latest_generation_jobs
+           WHERE latest_generation_jobs.source_id = ?
+           ORDER BY latest_generation_jobs.created_at DESC, latest_generation_jobs.rowid DESC
+           LIMIT 1
+         )`,
+      sourceId,
+      jobId,
+      sourceId,
+    );
   } else {
-    await db.runAsync('UPDATE generation_jobs SET updated_at = ? WHERE id = ?', updatedAt, jobId);
+    await db.runAsync(
+      `UPDATE generation_jobs
+       SET published_card_count = ?, held_candidate_count = ?, updated_at = ?
+       WHERE id = ?`,
+      publishedCardCount,
+      heldCandidateCount,
+      updatedAt,
+      jobId,
+    );
   }
 }
 
@@ -4070,7 +4494,7 @@ async function upsertCardQuality(
   );
 }
 
-async function getEvidenceForCard(cardId: string): Promise<EvidenceSnippet | undefined> {
+export async function getEvidenceForCard(cardId: string): Promise<EvidenceSnippet | undefined> {
   const db = await getDatabase();
   const evidence = await db.getFirstAsync<EvidenceSnippet>(
     `
@@ -4271,6 +4695,28 @@ async function upsertSearchIndex(db: WritableDatabase, cardId: string) {
   }
 }
 
+function buildConceptFirstSegments(
+  rows: ParsedSegment[],
+  conceptTargets: ReturnType<typeof extractConceptTargets>,
+): ParsedSegment[] {
+  if (!conceptTargets.length) return rows;
+  const seen = new Set<string>();
+  const ordered: ParsedSegment[] = [];
+  for (const concept of conceptTargets) {
+    const relevant = selectSegmentsForConcept(concept, rows, 3);
+    for (const seg of relevant) {
+      if (!seen.has(seg.id)) {
+        seen.add(seg.id);
+        ordered.push(seg);
+      }
+    }
+  }
+  for (const row of rows) {
+    if (!seen.has(row.id)) ordered.push(row);
+  }
+  return ordered;
+}
+
 async function runWriteTransaction(
   db: SQLite.SQLiteDatabase,
   task: (txn: WritableDatabase) => Promise<void>,
@@ -4282,3 +4728,111 @@ async function runWriteTransaction(
 
   await db.withExclusiveTransactionAsync(task);
 }
+
+export async function getOrCreateBariConversation(
+  contextType: 'card' | 'deck' | 'general',
+  contextId?: string,
+  title = 'Study Assistant',
+): Promise<{ id: string; title: string; messages: BariStoredMessage[] }> {
+  const db = await getDatabase();
+  let conversation = await db.getFirstAsync<{ id: string; title: string }>(
+    'SELECT id, title FROM bari_conversations WHERE context_type = ? AND (context_id = ? OR (context_id IS NULL AND ? IS NULL)) ORDER BY updated_at DESC LIMIT 1',
+    contextType,
+    contextId ?? null,
+    contextId ?? null,
+  );
+
+  if (!conversation) {
+    const newId = 'conv-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+    const timestamp = nowIso();
+    await db.runAsync(
+      'INSERT INTO bari_conversations (id, context_type, context_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      newId,
+      contextType,
+      contextId ?? null,
+      title,
+      timestamp,
+      timestamp,
+    );
+    conversation = { id: newId, title };
+  }
+
+  const rawMessages = await db.getAllAsync<{
+    id: string;
+    conversation_id: string;
+    role: 'user' | 'bari';
+    text: string;
+    citations_json: string | null;
+    evidence_json: string | null;
+    created_at: string;
+  }>(
+    'SELECT id, conversation_id, role, text, citations_json, evidence_json, created_at FROM bari_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+    conversation.id,
+  );
+
+  const messages: BariStoredMessage[] = rawMessages.map((m) => ({
+    id: m.id,
+    conversationId: m.conversation_id,
+    role: m.role,
+    text: m.text,
+    citations: m.citations_json ? JSON.parse(m.citations_json) : [],
+    evidence: m.evidence_json ? JSON.parse(m.evidence_json) : [],
+    createdAt: m.created_at,
+  }));
+
+  return { id: conversation.id, title: conversation.title, messages };
+}
+
+export async function saveBariMessage(
+  conversationId: string,
+  role: 'user' | 'bari',
+  text: string,
+  citations: Array<{ segmentId?: string; locator?: string; sectionPath?: string; text?: string }> = [],
+  evidence: Array<{ segmentId: string; locator: string; sectionPath: string; text: string }> = [],
+): Promise<void> {
+  const db = await getDatabase();
+  const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+  const timestamp = nowIso();
+
+  await db.runAsync(
+    'INSERT INTO bari_messages (id, conversation_id, role, text, citations_json, evidence_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id,
+    conversationId,
+    role,
+    text,
+    citations.length ? JSON.stringify(citations) : null,
+    evidence.length ? JSON.stringify(evidence) : null,
+    timestamp,
+  );
+
+  await db.runAsync(
+    'UPDATE bari_conversations SET updated_at = ? WHERE id = ?',
+    timestamp,
+    conversationId,
+  );
+}
+
+export async function clearBariConversation(conversationId: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM bari_messages WHERE conversation_id = ?', conversationId);
+  await db.runAsync('UPDATE bari_conversations SET updated_at = ? WHERE id = ?', nowIso(), conversationId);
+}
+
+export async function getSourceSegmentsForDeck(deckId: string): Promise<SourceSegment[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    id: string;
+    sourceId: string;
+    locator: string;
+    sectionPath: string;
+    text: string;
+    createdAt: string;
+  }>(
+    "    SELECT DISTINCT\n      source_segments.id,\n      source_segments.source_id AS sourceId,\n      source_segments.locator,\n      source_segments.section_path AS sectionPath,\n      source_segments.text,\n      source_segments.created_at AS createdAt\n    FROM source_segments\n    JOIN card_evidence ON card_evidence.segment_id = source_segments.id\n    JOIN cards ON cards.id = card_evidence.card_id\n    WHERE cards.deck_id = ? AND cards.deleted_at IS NULL\n    UNION\n    SELECT DISTINCT\n      source_segments.id,\n      source_segments.source_id AS sourceId,\n      source_segments.locator,\n      source_segments.section_path AS sectionPath,\n      source_segments.text,\n      source_segments.created_at AS createdAt\n    FROM source_segments\n    JOIN sources ON sources.id = source_segments.source_id\n    WHERE sources.default_deck_id = ? AND sources.deleted_at IS NULL AND sources.archived_at IS NULL\n    ORDER BY createdAt ASC",
+    deckId,
+    deckId,
+  );
+  return rows;
+}
+
+export type { BariStoredMessage };

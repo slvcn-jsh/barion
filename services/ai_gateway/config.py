@@ -6,6 +6,9 @@ from urllib.parse import urlsplit
 
 from .errors import GatewayError
 
+MAX_CLIENT_GENERATION_DEADLINE_SECONDS = 120
+GATEWAY_COMPLETION_MARGIN_SECONDS = 5
+
 
 @dataclass(frozen=True, slots=True)
 class GatewaySettings:
@@ -67,6 +70,18 @@ class GatewaySettings:
                 "BARION_AI_PROVIDER_RETRY_BASE_DELAY_SECONDS must not exceed BARION_AI_PROVIDER_RETRY_MAX_DELAY_SECONDS.",
                 503,
             )
+        provider_timeout_seconds = _bounded_float("BARION_AI_PROVIDER_TIMEOUT_SECONDS", 20, 1, 120)
+        provider_max_attempts = _bounded_int("BARION_AI_PROVIDER_MAX_ATTEMPTS", 3, 1, 10)
+        maximum_generation_seconds = (
+            provider_timeout_seconds * provider_max_attempts
+            + retry_max_delay_seconds * max(0, provider_max_attempts - 1)
+        )
+        if maximum_generation_seconds > MAX_CLIENT_GENERATION_DEADLINE_SECONDS - GATEWAY_COMPLETION_MARGIN_SECONDS:
+            raise GatewayError(
+                "configuration_error",
+                "Provider timeout and retry settings must finish within the 120-second client generation deadline.",
+                503,
+            )
         issuer = f"{supabase_url}/auth/v1" if supabase_url else None
         return cls(
             auth_mode=auth_mode,
@@ -81,8 +96,8 @@ class GatewaySettings:
             generation_provider=provider,
             generation_model=model,
             gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip() or None,
-            provider_timeout_seconds=_bounded_float("BARION_AI_PROVIDER_TIMEOUT_SECONDS", 30, 1, 120),
-            provider_max_attempts=_bounded_int("BARION_AI_PROVIDER_MAX_ATTEMPTS", 4, 1, 10),
+            provider_timeout_seconds=provider_timeout_seconds,
+            provider_max_attempts=provider_max_attempts,
             provider_retry_base_delay_seconds=retry_base_delay_seconds,
             provider_retry_max_delay_seconds=retry_max_delay_seconds,
             max_request_bytes=_bounded_int("BARION_AI_MAX_REQUEST_BYTES", 300_000, 10_000, 2_000_000),

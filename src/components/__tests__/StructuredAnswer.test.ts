@@ -17,6 +17,20 @@ describe('parseAnswerSections', () => {
     ]);
   });
 
+  it('handles markdown bold labels and bullet markers cleanly', () => {
+    const raw = [
+      '**Answer:** Metformin reduces hepatic glucose production.',
+      '- **Why it matters:** First line medication for type 2 diabetes.',
+      '**Study note:** Check renal function before starting.',
+    ].join('\n');
+    expect(parseAnswerSections(raw)).toEqual([
+      { label: 'Answer', body: 'Metformin reduces hepatic glucose production.' },
+      { label: 'Why it matters', body: 'First line medication for type 2 diabetes.' },
+      { label: 'Study note', body: 'Check renal function before starting.' },
+    ]);
+    expect(learnerAnswer(raw)).toBe('Metformin reduces hepatic glucose production.');
+  });
+
   it('hides internal source metadata from learner answer views', () => {
     expect(
       learnerAnswer([

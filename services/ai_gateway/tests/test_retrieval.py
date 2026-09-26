@@ -181,3 +181,44 @@ async def test_bm25_scoring_relevance(sample_segments):
     # The treatment segment (with metformin) should rank highest
     assert results[0].segmentId == "seg-3"
     assert "metformin" in results[0].text.lower()
+
+
+from ..retrieval import HybridRetriever, MockEmbeddingProvider, cosine_similarity
+
+
+@pytest.mark.asyncio
+async def test_cosine_similarity():
+    v1 = [1.0, 0.0, 0.0]
+    v2 = [1.0, 0.0, 0.0]
+    assert cosine_similarity(v1, v2) == 1.0
+
+    v3 = [0.0, 1.0, 0.0]
+    assert cosine_similarity(v1, v3) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_hybrid_retriever_fusion(sample_segments):
+    retriever = HybridRetriever(embedding_provider=MockEmbeddingProvider(dimension=32), alpha=0.5)
+    await retriever.index_segments(sample_segments)
+
+    request = BariChatRequest(
+        message="metformin and glucose production",
+        mode="source-strict",
+    )
+
+    results = await retriever.retrieve_evidence(request, max_segments=2)
+    assert len(results) <= 2
+    assert any("metformin" in s.text.lower() for s in results)
+
+
+@pytest.mark.asyncio
+async def test_hybrid_retriever_empty():
+    retriever = HybridRetriever()
+    await retriever.index_segments([])
+
+    request = BariChatRequest(
+        message="metformin",
+        mode="source-strict",
+    )
+    results = await retriever.retrieve_evidence(request, max_segments=3)
+    assert results == []

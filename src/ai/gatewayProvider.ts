@@ -42,7 +42,7 @@ export function createGatewayCardGenerationProvider(
             fetchImplementation,
           );
         }
-        if (!response.ok) throw httpError(response.status, config.model);
+        if (!response.ok) throw await httpError(response, config.model);
 
         let payload: unknown;
         try {
@@ -108,30 +108,97 @@ function invalidResponse(modelId: string) {
   );
 }
 
-function httpError(status: number, modelId: string) {
+async function httpError(response: Response, modelId: string) {
+  const status = response.status;
+  const gatewayError = await readGatewayError(response);
+  const gatewayCode = gatewayError?.code;
+  const options = {
+    recoverable: gatewayError?.recoverable ?? status >= 500,
+    providerId: gatewayError?.provider ?? 'barion-gateway',
+    modelId: gatewayError?.model ?? modelId,
+    httpStatus: status,
+    providerRequestId: gatewayError?.providerRequestId,
+    inputTokens: gatewayError?.inputTokens,
+    outputTokens: gatewayError?.outputTokens,
+    remoteCandidateCount: gatewayError?.remoteCandidateCount,
+  };
+  if (gatewayCode === 'provider_unavailable') {
+    return new BarionAIError('provider_unavailable', 'AI provider is temporarily unavailable.', {
+      ...options, recoverable: true,
+    });
+  }
+  if (gatewayCode === 'provider_timeout') {
+    return new BarionAIError('timeout_error', 'AI generation timed out.', {
+      ...options, recoverable: true,
+    });
+  }
+  if (gatewayCode === 'provider_rate_limited' || gatewayCode === 'rate_limited') {
+    return new BarionAIError('rate_limited', 'AI provider is busy. Try again later.', {
+      ...options, recoverable: true,
+    });
+  }
+  if (gatewayCode === 'invalid_provider_response') {
+    return new BarionAIError('invalid_provider_response', 'AI provider returned unusable output.', options);
+  }
+  if (gatewayCode === 'insufficient_candidates') {
+    return new BarionAIError('insufficient_evidence', 'AI output did not contain enough supported cards.', options);
+  }
+  if (gatewayCode === 'provider_authentication_error' || gatewayCode === 'authentication_error') {
+    return new BarionAIError('authentication_error', 'AI authentication failed.', {
+      ...options, recoverable: false,
+    });
+  }
+  if (gatewayCode === 'model_not_allowed' || gatewayCode === 'invalid_request' || gatewayCode === 'configuration_error') {
+    return new BarionAIError('configuration_error', 'AI gateway configuration rejected the request.', {
+      ...options, recoverable: false,
+    });
+  }
+  if (gatewayCode === 'request_too_large') {
+    return new BarionAIError('request_too_large', 'AI gateway request is too large.', options);
+  }
   if (status === 401 || status === 403) {
     return new BarionAIError('authentication_error', 'AI gateway rejected the request.', {
-      providerId: 'barion-gateway', modelId, httpStatus: status,
+      ...options, recoverable: false,
     });
   }
   if (status === 413) {
     return new BarionAIError('request_too_large', 'AI gateway request is too large.', {
-      providerId: 'barion-gateway', modelId, httpStatus: status,
+      ...options, recoverable: false,
     });
   }
   if (status === 429) {
     return new BarionAIError('rate_limited', 'AI gateway is busy. Try again later.', {
-      recoverable: true, providerId: 'barion-gateway', modelId, httpStatus: status,
+      ...options, recoverable: true,
     });
   }
   if (status === 504) {
     return new BarionAIError('timeout_error', 'AI generation timed out.', {
-      recoverable: true, providerId: 'barion-gateway', modelId, httpStatus: status,
+      ...options, recoverable: true,
     });
   }
   return new BarionAIError('model_unavailable', 'AI generation is temporarily unavailable.', {
-    recoverable: status >= 500, providerId: 'barion-gateway', modelId, httpStatus: status,
+    ...options,
   });
+}
+
+async function readGatewayError(response: Response) {
+  try {
+    const payload: unknown = await response.json();
+    if (!isRecord(payload) || !isRecord(payload.error)) return undefined;
+    const error = payload.error;
+    return {
+      code: typeof error.code === 'string' ? error.code : undefined,
+      recoverable: typeof error.recoverable === 'boolean' ? error.recoverable : undefined,
+      provider: typeof error.provider === 'string' ? error.provider : undefined,
+      model: typeof error.model === 'string' ? error.model : undefined,
+      providerRequestId: typeof error.providerRequestId === 'string' ? error.providerRequestId : undefined,
+      inputTokens: nonNegativeInteger(error.inputTokens),
+      outputTokens: nonNegativeInteger(error.outputTokens),
+      remoteCandidateCount: nonNegativeInteger(error.remoteCandidateCount),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseUsage(value: unknown) {

@@ -7,8 +7,8 @@ from services.card_evaluation.verification import VerificationCoordinator
 
 from .errors import GatewayError
 from .models import BariChatRequest, BariChatResponse, BariGeneration, CardGenerationRequest, CardGenerationResponse
-from .providers.base import GenerationProvider
-from .retrieval import NoOpRetriever, SourceRetriever
+from .providers.base import GenerationProvider, ProviderResult
+from .retrieval import HybridRetriever, NoOpRetriever, SourceRetriever
 from .telemetry import TelemetryEvent, record
 from .validation import validate_grounded_output
 
@@ -33,13 +33,17 @@ class GenerationOrchestrator:
         started = monotonic()
         try:
             result = await self.provider.generate_cards(request)
-            output = await asyncio.to_thread(
-                validate_grounded_output,
-                request,
-                result.output,
-                self.verifier,
-                verification_deadline=started + self.request_budget_seconds,
-            )
+            try:
+                output = await asyncio.to_thread(
+                    validate_grounded_output,
+                    request,
+                    result.output,
+                    self.verifier,
+                    verification_deadline=started + self.request_budget_seconds,
+                )
+            except GatewayError as error:
+                _attach_result_diagnostics(error, result, self.provider.model)
+                raise
             if len(output.candidates) < request.minCandidates:
                 raise GatewayError(
                     "insufficient_candidates",
@@ -47,7 +51,11 @@ class GenerationOrchestrator:
                     502,
                     True,
                     self.provider.id,
-                    {"validatedCandidateCount": len(output.candidates), "minCandidates": request.minCandidates},
+                    {
+                        **_result_diagnostics(result, self.provider.model),
+                        "validatedCandidateCount": len(output.candidates),
+                        "minCandidates": request.minCandidates,
+                    },
                 )
             record(TelemetryEvent(
                 requestId=request.requestId,
@@ -68,6 +76,7 @@ class GenerationOrchestrator:
                 usage=result.usage,
             )
         except Exception as error:
+            diagnostics = error.diagnostics if isinstance(error, GatewayError) and error.diagnostics else None
             record(TelemetryEvent(
                 requestId=request.requestId,
                 operation="card-generation",
@@ -76,9 +85,9 @@ class GenerationOrchestrator:
                 latencyMs=round((monotonic() - started) * 1_000),
                 success=False,
                 errorCategory=getattr(error, "code", "internal_error"),
+                diagnostics=diagnostics,
             ))
             raise
-
     async def bari_chat(self, request: BariChatRequest, identity_subject: str) -> BariChatResponse:
         started = monotonic()
 
@@ -95,6 +104,12 @@ class GenerationOrchestrator:
         evidence = request.evidence
         if not evidence:
             evidence = await self.retriever.retrieve_evidence(request, max_segments=5)
+        elif len(evidence) > 5:
+            hybrid = HybridRetriever()
+            await hybrid.index_segments(evidence)
+            top_evidence = await hybrid.retrieve_evidence(request, max_segments=5)
+            if top_evidence:
+                evidence = top_evidence
 
         # Create enriched request with retrieved evidence
         enriched_request = BariChatRequest(
@@ -121,7 +136,14 @@ class GenerationOrchestrator:
             citations = []
             if evidence:
                 for idx, segment in enumerate(evidence, 1):
-                    if segment.locator.lower() in result.message.lower():
+                    msg_lower = result.message.lower()
+                    if (
+                        segment.locator.lower() in msg_lower
+                        or f"[source {idx}]" in msg_lower
+                        or f"(source {idx})" in msg_lower
+                        or f"source {idx}" in msg_lower
+                        or len(evidence) == 1
+                    ):
                         citations.append({
                             "segmentId": segment.segmentId,
                             "locator": segment.locator,
@@ -160,3 +182,17 @@ class GenerationOrchestrator:
                 errorCategory=getattr(error, "code", "internal_error"),
             ))
             raise
+
+
+def _result_diagnostics(result: ProviderResult, model: str) -> dict[str, object]:
+    return {
+        "providerRequestId": result.request_id,
+        "model": model,
+        "inputTokens": result.usage.inputTokens if result.usage else None,
+        "outputTokens": result.usage.outputTokens if result.usage else None,
+        "remoteCandidateCount": len(result.output.candidates),
+    }
+
+
+def _attach_result_diagnostics(error: GatewayError, result: ProviderResult, model: str) -> None:
+    error.diagnostics = {**_result_diagnostics(result, model), **error.diagnostics}

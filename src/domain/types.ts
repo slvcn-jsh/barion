@@ -1,3 +1,5 @@
+import type { GenerationMode } from '@/ai/types';
+
 export type ReviewRating = 'again' | 'hard' | 'good' | 'easy';
 
 export type StudyMode = 'scheduled' | 'cram' | 'practice-test' | 'preview' | 'learn' | 'audio';
@@ -62,14 +64,23 @@ export type TestConfidence = 'unsure' | 'confident' | 'easy';
 
 export type CardStatus = 'manual' | 'generated_pending' | 'source_extracted' | 'verified' | 'needs_review';
 
-export type SourceStatus =
-  | 'importing'
-  | 'parsing'
-  | 'generating'
-  | 'review-ready'
-  | 'ready'
-  | 'action-required'
-  | 'failed';
+export const SOURCE_STATUSES = [
+  'importing',
+  'parsing',
+  'generating',
+  'review-ready',
+  'ready',
+  'action-required',
+  'failed',
+] as const;
+
+export type SourceStatus = (typeof SOURCE_STATUSES)[number];
+
+export function normalizeSourceStatus(status: unknown): SourceStatus {
+  return typeof status === 'string' && (SOURCE_STATUSES as readonly string[]).includes(status)
+    ? (status as SourceStatus)
+    : 'action-required';
+}
 
 export type CandidateStatus = 'pending' | 'approved' | 'rejected';
 
@@ -316,8 +327,12 @@ export type GenerationJobSummary = {
   id: string;
   status: string;
   summary: string;
+  generationMode: GenerationMode | null;
+  fallbackUsed: boolean;
   providerId: string;
   modelId: string;
+  attemptedProviderId?: string | null;
+  attemptedModelId?: string | null;
   promptId: string;
   promptVersion: string;
   requestId?: string | null;
@@ -325,6 +340,11 @@ export type GenerationJobSummary = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   fallbackReason?: string | null;
+  failureReason?: string | null;
+  remoteCandidateCount: number;
+  publishedCardCount: number;
+  heldCandidateCount: number;
+  durationMs?: number | null;
   createdAt: string;
   updatedAt?: string | null;
 };
@@ -390,4 +410,14 @@ export type CreateManualCardInput = {
   prompt: string;
   answer: string;
   cardType: string;
+};
+
+export type BariStoredMessage = {
+  id: string;
+  conversationId: string;
+  role: 'user' | 'bari';
+  text: string;
+  citations: Array<{ segmentId?: string; locator?: string; sectionPath?: string; text?: string }>;
+  evidence: Array<{ segmentId: string; locator: string; sectionPath: string; text: string }>;
+  createdAt: string;
 };

@@ -21,7 +21,7 @@ from .base import BariChatResult, ProviderResult
 
 CARD_GENERATION_MAX_OUTPUT_TOKENS = 32_768
 CARD_GENERATION_THINKING_LEVEL = "low"
-DEFAULT_MAX_ATTEMPTS = 4
+DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_DELAY_SECONDS = 1.0
 DEFAULT_RETRY_MAX_DELAY_SECONDS = 16.0
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -196,10 +196,16 @@ class GeminiGenerationProvider:
             )
             raise error
 
+        payload: dict[str, Any] = {}
+        raw_output: object = None
         try:
-            payload = response.json()
+            decoded_payload = response.json()
+            if not isinstance(decoded_payload, dict):
+                raise TypeError("Provider payload must be an object.")
+            payload = decoded_payload
             text = _response_text(payload)
-            output = GeneratedCardOutput.model_validate(json.loads(text))
+            raw_output = json.loads(text)
+            output = GeneratedCardOutput.model_validate(raw_output)
         except (ValueError, KeyError, TypeError, ValidationError) as error:
             raise GatewayError(
                 "invalid_provider_response",
@@ -207,16 +213,14 @@ class GeminiGenerationProvider:
                 502,
                 True,
                 self.id,
+                _generation_response_diagnostics(response, request, payload, raw_output, self.model),
             ) from error
 
-        usage = payload.get("usageMetadata") or {}
+        usage = _provider_usage(payload)
         return ProviderResult(
             request_id=response.headers.get("x-request-id") or request.requestId,
             output=output,
-            usage=ProviderUsage(
-                inputTokens=_non_negative_int(usage.get("promptTokenCount")),
-                outputTokens=_non_negative_int(usage.get("candidatesTokenCount")),
-            ),
+            usage=usage,
         )
 
     async def bari_chat(self, request: BariChatRequest, conversation_history: list[dict[str, str]]) -> BariChatResult:
@@ -306,6 +310,35 @@ def _response_text(payload: dict[str, Any]) -> str:
     if not text:
         raise KeyError("text")
     return text
+
+
+def _provider_usage(payload: dict[str, Any]) -> ProviderUsage:
+    usage = payload.get("usageMetadata")
+    usage_record = usage if isinstance(usage, dict) else {}
+    return ProviderUsage(
+        inputTokens=_non_negative_int(usage_record.get("promptTokenCount")),
+        outputTokens=_non_negative_int(usage_record.get("candidatesTokenCount")),
+    )
+
+
+def _generation_response_diagnostics(
+    response: httpx.Response,
+    request: CardGenerationRequest,
+    payload: dict[str, Any],
+    raw_output: object,
+    model: str,
+) -> dict[str, Any]:
+    usage = _provider_usage(payload)
+    raw_candidates = raw_output.get("candidates") if isinstance(raw_output, dict) else None
+    return {
+        "providerRequestId": _first_header(
+            response.headers, "x-request-id", "x-goog-request-id", "x-guploader-uploadid"
+        ) or request.requestId,
+        "model": model,
+        "inputTokens": usage.inputTokens,
+        "outputTokens": usage.outputTokens,
+        "remoteCandidateCount": len(raw_candidates) if isinstance(raw_candidates, list) else 0,
+    }
 
 
 def _provider_http_error(response: httpx.Response, started: float, attempt: int) -> GatewayError:

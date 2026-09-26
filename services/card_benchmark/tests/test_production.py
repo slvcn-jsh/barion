@@ -44,9 +44,10 @@ def test_provider_settings_load_gateway_dotenv_without_auth_token(tmp_path, monk
     for name in (
         "GEMINI_API_KEY",
         "PRIMARY_GENERATION_PROVIDER",
-        "PRIMARY_GENERATION_MODEL",
-        "BARION_AI_PROVIDER_TIMEOUT_SECONDS",
-        "BARION_AI_GATEWAY_AUTH_TOKEN",
+            "PRIMARY_GENERATION_MODEL",
+            "BARION_AI_PROVIDER_TIMEOUT_SECONDS",
+            "BARION_AI_PROVIDER_MAX_ATTEMPTS",
+            "BARION_AI_GATEWAY_AUTH_TOKEN",
     ):
         monkeypatch.delenv(name, raising=False)
     env_path = tmp_path / ".env"
@@ -64,7 +65,7 @@ def test_provider_settings_load_gateway_dotenv_without_auth_token(tmp_path, monk
     assert settings.provider == "gemini"
     assert settings.model == "test-model"
     assert settings.timeout_seconds == 45
-    assert settings.max_attempts == 4
+    assert settings.max_attempts == 3
     assert settings.retry_base_delay_seconds == 1
     assert settings.retry_max_delay_seconds == 16
 

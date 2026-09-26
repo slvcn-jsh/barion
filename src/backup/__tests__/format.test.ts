@@ -82,4 +82,15 @@ describe('Barion backup format', () => {
     const parsed = parseBackupEnvelope(JSON.stringify(backup));
     expect(parsed.payload.tables.source_study_guides).toEqual([]);
   });
+
+  it('upgrades version-three backups with empty bari conversation tables', () => {
+    const backup = validBackup();
+    backup.formatVersion = 3 as typeof BARION_BACKUP_VERSION;
+    delete (backup.payload.tables as Partial<BackupTables>).bari_conversations;
+    delete (backup.payload.tables as Partial<BackupTables>).bari_messages;
+
+    const parsed = parseBackupEnvelope(JSON.stringify(backup));
+    expect(parsed.payload.tables.bari_conversations).toEqual([]);
+    expect(parsed.payload.tables.bari_messages).toEqual([]);
+  });
 });

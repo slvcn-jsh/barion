@@ -13,8 +13,14 @@ const SUPPORTED_CARD_TYPES = new Set([
   'algorithm-step',
 ]);
 
-const STRUCTURED_ANSWER_LABELS = [/^answer:/im, /^why it matters:/im, /^study note:/im];
+const STRUCTURED_ANSWER_LABELS = [
+  /^\s*(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?\s*answer\s*(?:\*{1,2})?\s*[:\-]\s*/im,
+  /^\s*(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?\s*why\s+it\s+matters\s*(?:\*{1,2})?\s*[:\-]\s*/im,
+  /^\s*(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?\s*study\s+note\s*(?:\*{1,2})?\s*[:\-]\s*/im,
+];
 const VAGUE_QUESTION = /\bwhat does\s+(?:page\s+\w+|the (?:text|section|author|document|source))\b|\baccording to\s+(?:page\s+\w+|the (?:text|section|document|source))\b/i;
+const COMPOUND_QUESTION = /\?[^\n?]{3,}\?|\b(?:what|how|why)\b.{5,60}\b(?:and\s+(?:what|how|why|how is it|what are))\b/i;
+const MECHANICAL_TRANSFORM = /\bwhat (?:may|might|can) occur when\b|\bwhat is the result when\b/i;
 
 export function evaluateGatewayCardQuality(draft: GroundedCardCandidate): number {
   const structuredLabelCount = STRUCTURED_ANSWER_LABELS.filter((pattern) => pattern.test(draft.answer)).length;
@@ -33,6 +39,8 @@ export function evaluateGatewayCardQuality(draft: GroundedCardCandidate): number
   if (draft.learningObjective.length >= 10 && draft.learningObjective.length <= 200) score += 0.04;
   if (SUPPORTED_CARD_TYPES.has(draft.cardType)) score += 0.04;
   if (VAGUE_QUESTION.test(draft.question)) score -= 0.25;
+  if (COMPOUND_QUESTION.test(draft.question)) score -= 0.20;
+  if (MECHANICAL_TRANSFORM.test(draft.question)) score -= 0.20;
 
   return Math.max(0.50, Math.min(0.98, Number(score.toFixed(2))));
 }
@@ -40,6 +48,8 @@ export function evaluateGatewayCardQuality(draft: GroundedCardCandidate): number
 export function describeGatewayCardQuality(draft: GroundedCardCandidate, score: number): string {
   const issues: string[] = [];
   if (VAGUE_QUESTION.test(draft.question)) issues.push('question depends on source wording');
+  if (COMPOUND_QUESTION.test(draft.question)) issues.push('question is compound rather than atomic');
+  if (MECHANICAL_TRANSFORM.test(draft.question)) issues.push('question is mechanically transformed from source text');
   if (!STRUCTURED_ANSWER_LABELS.every((pattern) => pattern.test(draft.answer))) {
     issues.push('structured answer is incomplete');
   }
@@ -51,6 +61,6 @@ export function describeGatewayCardQuality(draft: GroundedCardCandidate, score: 
   return `${Math.round(score * 100)}% quality · AI active recall · ${typeLabel} · held before publishing: ${reviewReason}.`;
 }
 
-export function shouldAutoPublishCandidate(qualityScore: number, isLocalExtractive: boolean, threshold: number): boolean {
-  return isLocalExtractive && qualityScore >= threshold;
+export function shouldAutoPublishCandidate(qualityScore: number, _isLocalExtractive: boolean, threshold: number): boolean {
+  return qualityScore >= threshold;
 }

@@ -1,0 +1,129 @@
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+<meta charset='utf-8'>
+<title>ML Empowerment Build Challenge 3.0 — Barion Devpost Submission</title>
+<style>
+  body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+    color: #1E293B;
+    background-color: #FFFFFF;
+    line-height: 1.6;
+    margin: 40px auto;
+    max-width: 900px;
+    padding: 20px;
+  }
+  h1, h2, h3 {
+    color: #0F2D60;
+    font-weight: 700;
+  }
+  h1 {
+    font-size: 24pt;
+    border-bottom: 3px solid #3B82F6;
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h2 {
+    font-size: 16pt;
+    border-bottom: 1.5px solid #E2E8F0;
+    padding-bottom: 6px;
+    margin-top: 30px;
+    color: #1E3A8A;
+  }
+  .badge {
+    background: #EEF6FF;
+    color: #1D4ED8;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 10pt;
+    font-weight: 600;
+    display: inline-block;
+    margin-bottom: 16px;
+  }
+  .tagline {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #0D9488;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+  .section-card {
+    background: #F8FAFC;
+    border-left: 4px solid #3B82F6;
+    padding: 16px 20px;
+    margin: 20px 0;
+    border-radius: 4px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+  }
+  th, td {
+    border: 1px solid #CBD5E1;
+    padding: 10px 12px;
+    text-align: left;
+  }
+  th {
+    background: #F1F5F9;
+  }
+</style>
+</head>
+<body>
+
+<div class='badge'>DEVPOST SUBMISSION ENTRY</div>
+<h1>Barion: Source-Grounded Medical Spaced Repetition Platform</h1>
+<div class='tagline'>Learn Today. Heal Tomorrow.</div>
+
+<h2>1. Project Title</h2>
+<p><strong>Barion — Source-Grounded Medical Active-Recall & Spaced Repetition Engine with Interactive AI Companion</strong></p>
+
+<h2>2. Problem Statement</h2>
+<p>
+  Medical students and healthcare professionals are tasked with memorizing over 15,000 distinct clinical facts, drug interactions, contraindications, and anatomical pathways. While spaced repetition (Anki, Quizlet) is the gold standard for long-term retention, manual card creation takes hundreds of hours, and generic AI flashcard generators frequently hallucinate incorrect drug dosages, lethal contraindications, or fabricated physiological mechanisms. In medical education, an AI hallucination isn't just an error—it can compromise patient safety.
+</p>
+
+<h2>3. Solution Overview</h2>
+<p>
+  <strong>Barion</strong> eliminates medical hallucinations by coupling state-of-the-art generative AI (Google Gemini 3.5 Flash-Lite) with a strict, multi-agent verification pipeline, DailyMed FDA labeling cross-checks, character-exact verbatim source-span contracts, and the modern Free Spaced Repetition Scheduler (FSRS).
+</p>
+<p>
+  Students simply upload their course PDFs or lecture notes. Barion tokenizes and indexes the material, synthesizes atomic active-recall cards with structured 3-part explanations (Core Answer, Clinical Rationale, Memory Anchor), and provides <strong>Bari</strong>—an expressive, animated 3D study companion who explains complex physiological mechanisms strictly using the learner's uploaded notes.
+</p>
+
+<h2>4. Key Features</h2>
+<ul>
+  <li><strong>Verbatim Source-Span Grounding:</strong> Every card and explanation includes character-exact proof pointing directly to the source page and paragraph.</li>
+  <li><strong>FSRS Spaced Repetition Engine:</strong> Next-generation DSR (Difficulty-Stability-Retrievability) algorithm optimizing memory retention 20-30% more efficiently than legacy SM-2.</li>
+  <li><strong>Bari Interactive Mascot:</strong> Animated 3D-styled study companion with physics-based floating, breathing, and responsive expression states (idle, thinking, happy, explaining).</li>
+  <li><strong>Offline-First Architecture:</strong> Full local SQLite persistence (WAL mode) with automatic deterministic retrieval fallback when network connectivity is lost.</li>
+  <li><strong>Multi-Agent Authority Checking:</strong> Integration with DailyMed FDA labeling databases to cross-verify pharmacological claims.</li>
+  <li><strong>Progressive Provenance Disclosure:</strong> Minimalist, distraction-free study interface keeping learners focused without cognitive clutter.</li>
+</ul>
+
+<h2>5. Technologies Used</h2>
+<table>
+  <tr><td><strong>Frontend:</strong></td><td>React Native, Expo v57, TypeScript, Expo Router, React Native Animated</td></tr>
+  <tr><td><strong>Database:</strong></td><td>SQLite (expo-sqlite) with WAL journaling, compound indexes, FTS5 search</td></tr>
+  <tr><td><strong>Backend / AI Gateway:</strong></td><td>Python 3.12, FastAPI, Uvicorn, Pydantic v2, HTTPX Async</td></tr>
+  <tr><td><strong>AI Model:</strong></td><td>Google Gemini (gemini-3.5-flash-lite) with Structured JSON Schema & System Guardrails</td></tr>
+  <tr><td><strong>Verification & Authority:</strong></td><td>DailyMed FDA Drug Labeling Adapter, Multi-Agent Coordinator</td></tr>
+  <tr><td><strong>Cognitive Science Engine:</strong></td><td>ts-fsrs (Free Spaced Repetition Scheduler v5)</td></tr>
+  <tr><td><strong>Testing Suite:</strong></td><td>Jest (33 suites, 189 tests), Pytest (166 tests)</td></tr>
+</table>
+
+<h2>6. Target Users</h2>
+<ul>
+  <li>Medical students (USMLE Step 1, Step 2 CK, Step 3 candidates).</li>
+  <li>Nursing and pharmacy students (NCLEX-RN, NAPLEX candidates).</li>
+  <li>Physician Assistant and healthcare residency trainees.</li>
+  <li>Lifelong clinical educators and medical researchers.</li>
+</ul>
+
+<h2>7. Social Impact Statement</h2>
+<p>
+  Healthcare education is notoriously expensive and mentally taxing. By providing an open, verifiable, offline-first study engine, Barion levels the playing field for medical students globally—especially in regions with intermittent internet connectivity—while guaranteeing that future doctors and nurses study only verified, unhallucinated medical truth.
+</p>
+
+<p><em>Barion Devpost Package • Prepared for ML Empowerment Build Challenge 3.0</em></p>
+</body>
+</html>

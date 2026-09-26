@@ -62,7 +62,7 @@ def load_provider_settings(env_path: Path = _GATEWAY_ENV_PATH) -> ProviderSettin
     if not model:
         raise ValueError("PRIMARY_GENERATION_MODEL is required.")
 
-    timeout_raw = os.getenv("BARION_AI_PROVIDER_TIMEOUT_SECONDS", "30").strip()
+    timeout_raw = os.getenv("BARION_AI_PROVIDER_TIMEOUT_SECONDS", "20").strip()
     try:
         timeout_seconds = float(timeout_raw)
     except ValueError as error:
@@ -70,7 +70,7 @@ def load_provider_settings(env_path: Path = _GATEWAY_ENV_PATH) -> ProviderSettin
     if timeout_seconds < 1 or timeout_seconds > 120:
         raise ValueError("BARION_AI_PROVIDER_TIMEOUT_SECONDS must be between 1 and 120.")
 
-    max_attempts = _env_int("BARION_AI_PROVIDER_MAX_ATTEMPTS", 4, 1, 10)
+    max_attempts = _env_int("BARION_AI_PROVIDER_MAX_ATTEMPTS", 3, 1, 10)
     retry_base_delay_seconds = _env_float("BARION_AI_PROVIDER_RETRY_BASE_DELAY_SECONDS", 1, 0, 60)
     retry_max_delay_seconds = _env_float("BARION_AI_PROVIDER_RETRY_MAX_DELAY_SECONDS", 16, 0, 300)
     if retry_base_delay_seconds > retry_max_delay_seconds:

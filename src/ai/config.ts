@@ -10,11 +10,17 @@ export type PublicGatewayConfig = {
 const SENSITIVE_KEY = /api.?key|secret|token|authorization|credential/i;
 
 export function readExpoPublicGatewayConfig(): PublicGatewayConfig | null {
-  const gatewayUrl = process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL;
-  const model = process.env.EXPO_PUBLIC_BARION_AI_MODEL;
-  const accessToken = process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN;
+  const env = process.env as Record<string, string | undefined>;
+  const gatewayUrl = env['EXPO_PUBLIC_BARION_AI_GATEWAY_URL'];
+  const model = env['EXPO_PUBLIC_BARION_AI_MODEL'];
+  const accessToken = env['EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN'];
+  const timeoutMs = readOptionalInteger(env['EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS']);
   if (!gatewayUrl) return null;
-  return parsePublicGatewayConfig({ gatewayUrl, model, accessToken });
+  return parsePublicGatewayConfig({ gatewayUrl, model, accessToken, timeoutMs });
+}
+
+export function resolvePublicGatewayConfig(): PublicGatewayConfig | null {
+  return readExpoPublicGatewayConfig();
 }
 
 export function parsePublicGatewayConfig(value: unknown): PublicGatewayConfig {
@@ -30,7 +36,7 @@ export function parsePublicGatewayConfig(value: unknown): PublicGatewayConfig {
   const gatewayUrl = readRequiredString(value.gatewayUrl, 'AI gateway URL is required.');
   const model = readRequiredString(value.model, 'AI model identifier is required.');
   const accessToken = optionalString(value.accessToken);
-  const timeoutMs = value.timeoutMs === undefined ? 30_000 : value.timeoutMs;
+  const timeoutMs = value.timeoutMs === undefined ? 120_000 : value.timeoutMs;
   if (!Number.isInteger(timeoutMs) || Number(timeoutMs) < 1_000 || Number(timeoutMs) > 120_000) {
     throw configurationError('AI gateway timeout must be between 1000 and 120000 milliseconds.');
   }
@@ -77,4 +83,10 @@ function optionalString(value: unknown) {
 
 function configurationError(message: string) {
   return new BarionAIError('configuration_error', message);
+}
+
+function readOptionalInteger(value: string | undefined) {
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : value;
 }

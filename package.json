@@ -49,7 +49,8 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "expo start --dev-client",
+    "start": "node scripts/start-development.js",
+    "start:expo": "expo start --dev-client",
     "start:mobile": "expo start --dev-client --tunnel",
     "android": "expo start --android",
     "ios": "expo start --dev-client --tunnel",
@@ -58,7 +59,8 @@
     "ios:build:preview": "npx eas-cli@latest build --platform ios --profile preview-simulator",
     "eas:login": "npx eas-cli@latest login",
     "eas:link": "npx eas-cli@latest init",
-    "web": "node scripts/start-web.js",
+    "web": "node scripts/start-development.js --web",
+    "web:expo": "node scripts/start-web.js",
     "gateway": "python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790",
     "benchmark:cards": "python -m services.card_benchmark",
     "benchmark:cards:dry": "python -m services.card_benchmark --dry-run",

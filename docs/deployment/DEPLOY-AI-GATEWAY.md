@@ -43,8 +43,11 @@ Expected: `{"status": "ok", "generationProvider": {"status": "configured"}}`
 ```powershell
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_URL='http://127.0.0.1:8790'
 $env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-2.5-flash'
+$env:EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS='120000'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN='dev-token-replace-with-random-string'
 ```
+
+`127.0.0.1` works for Expo web on the gateway host. Android emulator/device testing requires either `adb reverse tcp:8790 tcp:8790` while retaining the localhost URL, or a configurable HTTPS gateway/tunnel. Physical iOS devices require a reachable HTTPS gateway/tunnel. Never hard-code a developer LAN IP into application source.
 
 ### 6. Start Client
 
@@ -72,7 +75,8 @@ GEMINI_API_KEY=AIzaSy...
 BARION_AI_ALLOWED_ORIGINS=https://app.example.com
 
 # Limits
-BARION_AI_PROVIDER_TIMEOUT_SECONDS=30
+BARION_AI_PROVIDER_TIMEOUT_SECONDS=20
+BARION_AI_PROVIDER_MAX_ATTEMPTS=3
 BARION_AI_MAX_REQUEST_BYTES=300000
 BARION_AI_MAX_INPUT_CHARACTERS=180000
 ```
@@ -82,6 +86,7 @@ BARION_AI_MAX_INPUT_CHARACTERS=180000
 ```bash
 EXPO_PUBLIC_BARION_AI_GATEWAY_URL=https://gateway.example.com
 EXPO_PUBLIC_BARION_AI_MODEL=gemini-2.5-flash
+EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS=120000
 EXPO_PUBLIC_SUPABASE_URL=https://yourproject.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 # ⚠️ NEVER set static token in production

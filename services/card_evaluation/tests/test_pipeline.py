@@ -221,3 +221,17 @@ def test_expired_verification_deadline_holds_high_risk_claim_for_review():
     )
     assert result["medicalVerificationStatus"] == "authority_unavailable"
     assert result["publicationDisposition"] == "REVIEW"
+
+
+def test_markdown_bold_structured_answer_labels_are_parsed_and_published():
+    text = "Metformin reduces hepatic glucose production. It is first-line therapy for type 2 diabetes."
+    raw_answer = (
+        "**Answer:** Metformin reduces hepatic glucose production.\n"
+        "**Why it matters:** It is first-line therapy for type 2 diabetes.\n"
+        "**Study note:** High yield diabetes mechanism."
+    )
+    card = candidate(raw_answer, text, text)
+    _effective, result = evaluate(card, text)
+    assert result["publicationDisposition"] in {"PUBLISH", "SANITIZE"}
+    core_claims = [item for item in result["claimResults"] if item["field"] == "core_answer"]
+    assert any("reduces hepatic glucose production" in item["claimText"] for item in core_claims)

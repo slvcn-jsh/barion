@@ -1,3 +1,6 @@
+import { buildBariDeckEvidence } from '@/ai/bariChat';
+import type { BariChatSourceSegment } from '@/ai/types';
+import { BariChatModal } from '@/components/BariChatModal';
 import { Ionicons } from '@expo/vector-icons';
 import { File as ExpoFile, Paths } from 'expo-file-system';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -8,9 +11,9 @@ import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, Vi
 import { cardTrustSummary } from '@/cards/trust';
 import { AppButton } from '@/components/AppButton';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { EvidenceBox } from '@/components/EvidenceBox';
 import { EmptyState, LoadingState } from '@/components/ScreenState';
 import { StructuredAnswer } from '@/components/StructuredAnswer';
+import { SourceProvenance } from '@/components/SourceProvenance';
 import type { DeckSummary, StudyCard } from '@/domain/types';
 import { initializeDatabase } from '@/storage/database';
 import {
@@ -22,6 +25,7 @@ import {
   getCardDeletionImpact,
   getDeck,
   getDeckDeletionImpact,
+  getSourceSegmentsForDeck,
   markCardNeedsSourceReview,
   restoreCardFromSourceReview,
   setCardFlagged,
@@ -43,6 +47,8 @@ export default function DeckScreen() {
   const [editPrompt, setEditPrompt] = useState('');
   const [editAnswer, setEditAnswer] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [bariChatOpen, setBariChatOpen] = useState(false);
+  const [deckEvidence, setDeckEvidence] = useState<BariChatSourceSegment[]>([]);
   const [confirmation, setConfirmation] = useState<{
     kind: 'deck' | 'cards';
     ids: string[];
@@ -255,6 +261,15 @@ export default function DeckScreen() {
     }
   }
 
+
+  async function openBariChat() {
+    if (!deck) return;
+    const segments = await getSourceSegmentsForDeck(deck.id);
+    const evidence = buildBariDeckEvidence(segments);
+    setDeckEvidence(evidence);
+    setBariChatOpen(true);
+  }
+
   async function copyCurrentDeck() {
     if (!deck || busy) return;
     setBusy(true);
@@ -298,10 +313,6 @@ export default function DeckScreen() {
       <View style={styles.summary}>
         <Text style={styles.summaryItem}>{deck.cardCount} cards</Text>
         <Text style={styles.summaryItem}>{deck.dueCount} due</Text>
-        <Text style={styles.summaryItem}>{deck.evidenceCount} evidence links</Text>
-        <Text style={[styles.summaryItem, needsSourceCheckCount ? styles.summaryWarning : null]}>
-          {needsSourceCheckCount} source checks
-        </Text>
       </View>
 
       <View style={styles.actions}>
@@ -321,6 +332,12 @@ export default function DeckScreen() {
           icon="cloud-upload-outline"
           variant="secondary"
           onPress={() => router.push({ pathname: '/card/new', params: { deckId: deck.id, mode: 'bulk' } })}
+        />
+        <AppButton
+          label="Ask Bari About Deck"
+          icon="sparkles-outline"
+          variant="secondary"
+          onPress={() => void openBariChat()}
         />
         <AppButton
           label="Test This Set"
@@ -410,15 +427,14 @@ export default function DeckScreen() {
                 </Pressable>
               ) : null}
               <Text style={styles.cardPrompt}>{editing ? 'Edit card wording' : card.prompt}</Text>
-              <View style={styles.cardBadges}>
-                <TrustBadge label={trust.label} tone={trust.tone} />
-                {card.weakScore ? <Text style={styles.weakStatus}>WEAK · REPAIR</Text> : null}
-                {card.isSuspended ? <Text style={styles.pauseStatus}>PAUSED</Text> : null}
-                {card.isFlagged ? <Text style={styles.flagStatus}>FLAGGED</Text> : null}
-                {card.qualityScore ? <Text style={styles.qualityStatus}>{Math.round(card.qualityScore * 100)}% QUALITY</Text> : null}
-                <Text style={styles.status}>{formatCardStatus(card.status)}</Text>
+                <View style={styles.cardBadges}>
+                  <TrustBadge label={trust.label} tone={trust.tone} />
+                  {card.weakScore ? <Text style={styles.weakStatus}>WEAK · REPAIR</Text> : null}
+                  {card.isSuspended ? <Text style={styles.pauseStatus}>PAUSED</Text> : null}
+                  {card.isFlagged ? <Text style={styles.flagStatus}>FLAGGED</Text> : null}
+                  <Text style={styles.status}>{formatCardStatus(card.status)}</Text>
+                </View>
               </View>
-            </View>
             {editing ? (
               <View style={styles.editor}>
                 <View style={styles.field}>
@@ -467,7 +483,7 @@ export default function DeckScreen() {
                 <StructuredAnswer answer={card.answer} />
               </>
             )}
-            <EvidenceBox evidence={card.evidence} />
+            <SourceProvenance evidence={card.evidence} initialExpanded={false} />
             {!editing && needsCheck && card.qualityNotes ? (
               <View style={styles.reviewReason}>
                 <Ionicons name="create-outline" size={16} color="#9a5b09" />
@@ -515,6 +531,16 @@ export default function DeckScreen() {
       onCancel={() => setConfirmation(null)}
       onConfirm={() => void confirmRemoval()}
     />
+    {deck ? (
+      <BariChatModal
+        visible={bariChatOpen}
+        onClose={() => setBariChatOpen(false)}
+        contextType="deck"
+        contextId={deck.id}
+        contextTitle={deck.title}
+        evidence={deckEvidence}
+      />
+    ) : null}
     </>
   );
 }

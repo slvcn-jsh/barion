@@ -132,6 +132,9 @@ describe('AI Card Generation & Auth Integration', () => {
 
     expect(result.provenance.providerId).toBe('gemini');
     expect(result.provenance.modelId).toBe('gemini-2.5-flash');
+    expect(result.provenance.generationMode).toBe('REMOTE_AI');
+    expect(result.provenance.fallbackUsed).toBe(false);
+    expect(result.provenance.remoteCandidateCount).toBe(1);
     expect(result.provenance.fallbackReason).toBeUndefined();
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0].question).toBe('What class of antiarrhythmic is Amiodarone?');
@@ -226,6 +229,8 @@ describe('AI Card Generation & Auth Integration', () => {
     );
 
     expect(result.provenance.providerId).toBe('local-extractive');
+    expect(result.provenance.generationMode).toBe('LOCAL_FALLBACK');
+    expect(result.provenance.fallbackUsed).toBe(true);
     expect(result.provenance.fallbackReason).toBe('authentication_error');
     expect(result.candidates).toEqual([expect.objectContaining({
       ...localFallbackCandidate,
@@ -251,6 +256,8 @@ describe('AI Card Generation & Auth Integration', () => {
     );
 
     expect(result.provenance.providerId).toBe('local-extractive');
+    expect(result.provenance.generationMode).toBe('LOCAL_FALLBACK');
+    expect(result.provenance.fallbackUsed).toBe(true);
     expect(result.provenance.fallbackReason).toBe('model_unavailable');
     expect(result.candidates).toEqual([expect.objectContaining({
       ...localFallbackCandidate,

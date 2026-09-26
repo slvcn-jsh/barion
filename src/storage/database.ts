@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { seedDatabaseIfNeeded } from '@/storage/seed';
 
-export const DATABASE_VERSION = 19;
+export const DATABASE_VERSION = 22;
 
 let database: SQLite.SQLiteDatabase | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -180,6 +180,15 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       input_tokens INTEGER,
       output_tokens INTEGER,
       fallback_reason TEXT,
+      fallback_used INTEGER NOT NULL DEFAULT 0,
+      generation_mode TEXT,
+      attempted_provider_id TEXT,
+      attempted_model_id TEXT,
+      remote_candidate_count INTEGER NOT NULL DEFAULT 0,
+      published_card_count INTEGER NOT NULL DEFAULT 0,
+      held_candidate_count INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER,
+      failure_reason TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -203,6 +212,7 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       evaluation_version TEXT NOT NULL DEFAULT 'legacy',
       policy_version TEXT NOT NULL DEFAULT 'legacy',
       sanitization_reason TEXT,
+      published_card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
       verification_status TEXT NOT NULL,
       support_score REAL NOT NULL,
       status TEXT NOT NULL,
@@ -402,6 +412,25 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       completed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS bari_conversations (
+      id TEXT PRIMARY KEY NOT NULL,
+      context_type TEXT NOT NULL,
+      context_id TEXT,
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS bari_messages (
+      id TEXT PRIMARY KEY NOT NULL,
+      conversation_id TEXT NOT NULL REFERENCES bari_conversations(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL,
+      citations_json TEXT,
+      evidence_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS game_events (
       id TEXT PRIMARY KEY NOT NULL,
       session_id TEXT NOT NULL REFERENCES game_sessions(id) ON DELETE CASCADE,
@@ -420,6 +449,8 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
   );
 
   const repairedColumns = await ensureRequiredColumns(db);
+
+  await recoverInterruptedGenerationJobs(db);
 
   if (currentVersion < 11) {
     await db.execAsync(`
@@ -509,6 +540,34 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
     `);
   }
 
+  if (currentVersion < 22) {
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS bari_conversations (
+        id TEXT PRIMARY KEY NOT NULL,
+        context_type TEXT NOT NULL,
+        context_id TEXT,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS bari_messages (
+        id TEXT PRIMARY KEY NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES bari_conversations(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        citations_json TEXT,
+        evidence_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_bari_conversations_context ON bari_conversations(context_type, context_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_bari_messages_conversation ON bari_messages(conversation_id, created_at ASC);
+    `);
+  }
+
+  await repairInvalidSourceStatuses(db);
+
   const needsSourceDeckRepair =
     currentVersion < 5 || repairedColumns.defaultDeckId || (await hasSourceDeckOwnershipGaps(db));
   const needsDuplicateSourceConsolidation =
@@ -526,6 +585,17 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
 
   await createIndexes(db);
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}`);
+}
+
+async function repairInvalidSourceStatuses(db: SQLite.SQLiteDatabase) {
+  await db.runAsync(
+    `UPDATE sources
+     SET status = 'action-required',
+         ingestion_error = ?
+     WHERE status IS NULL
+        OR status NOT IN ('importing', 'parsing', 'generating', 'review-ready', 'ready', 'action-required', 'failed')`,
+    'Barion could not restore this source state. Try processing the material again.',
+  );
 }
 
 async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
@@ -612,7 +682,43 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
     generationJobInputTokens: await addColumnIfMissing(db, 'generation_jobs', 'input_tokens', 'INTEGER'),
     generationJobOutputTokens: await addColumnIfMissing(db, 'generation_jobs', 'output_tokens', 'INTEGER'),
     generationJobFallbackReason: await addColumnIfMissing(db, 'generation_jobs', 'fallback_reason', 'TEXT'),
+    generationJobFallbackUsed: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'fallback_used',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    generationJobMode: await addColumnIfMissing(db, 'generation_jobs', 'generation_mode', 'TEXT'),
+    generationJobAttemptedProviderId: await addColumnIfMissing(db, 'generation_jobs', 'attempted_provider_id', 'TEXT'),
+    generationJobAttemptedModelId: await addColumnIfMissing(db, 'generation_jobs', 'attempted_model_id', 'TEXT'),
+    generationJobRemoteCandidateCount: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'remote_candidate_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    generationJobPublishedCardCount: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'published_card_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    generationJobHeldCandidateCount: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'held_candidate_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    generationJobDurationMs: await addColumnIfMissing(db, 'generation_jobs', 'duration_ms', 'INTEGER'),
+    generationJobFailureReason: await addColumnIfMissing(db, 'generation_jobs', 'failure_reason', 'TEXT'),
     generationJobUpdatedAt: await addColumnIfMissing(db, 'generation_jobs', 'updated_at', 'TEXT'),
+    generationJobBatchMetadata: await addColumnIfMissing(db, 'generation_jobs', 'batch_metadata_json', 'TEXT'),
+    generatedCandidatePublishedCardId: await addColumnIfMissing(
+      db,
+      'generated_candidates',
+      'published_card_id',
+      'TEXT REFERENCES cards(id) ON DELETE SET NULL',
+    ),
     memoryInitialFsrsCardJson: await addColumnIfMissing(db, 'memory_states', 'initial_fsrs_card_json', 'TEXT'),
     noteDeletedAt: await addColumnIfMissing(db, 'notes', 'deleted_at', 'TEXT'),
     reviewEventRevertedAt: await addColumnIfMissing(db, 'review_events', 'reverted_at', 'TEXT'),
@@ -717,6 +823,74 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'TEXT',
     ),
   };
+}
+
+export async function normalizeGenerationJobProvenance(db: SQLite.SQLiteDatabase) {
+  await db.execAsync(`
+    UPDATE generation_jobs
+    SET generation_mode = COALESCE(generation_mode, CASE
+          WHEN status = 'failed' THEN 'FAILED'
+          WHEN source_id IN (SELECT id FROM sources WHERE sha256 = 'built-in-curated-demo-v1') THEN NULL
+          WHEN provider_id = 'local-extractive' THEN 'LOCAL_FALLBACK'
+          ELSE 'REMOTE_AI'
+        END),
+        fallback_used = CASE
+          WHEN generation_mode IN ('LOCAL_FALLBACK', 'PARTIAL_REMOTE_WITH_FALLBACK') THEN 1
+          WHEN source_id IN (SELECT id FROM sources WHERE sha256 = 'built-in-curated-demo-v1') THEN 0
+          WHEN status <> 'failed' AND provider_id = 'local-extractive' THEN 1
+          ELSE COALESCE(fallback_used, 0)
+        END,
+        remote_candidate_count = CASE
+          WHEN remote_candidate_count > 0 THEN remote_candidate_count
+          WHEN provider_id = 'local-extractive' THEN 0
+          WHEN remote_candidate_count = 0 THEN (
+            SELECT COUNT(*) FROM generated_candidates
+            WHERE generated_candidates.job_id = generation_jobs.id
+          )
+          ELSE remote_candidate_count
+        END,
+        published_card_count = (
+          SELECT COUNT(DISTINCT COALESCE(generated_candidates.published_card_id, generated_candidates.id))
+          FROM generated_candidates
+          WHERE generated_candidates.job_id = generation_jobs.id
+            AND generated_candidates.status = 'approved'
+        ),
+        held_candidate_count = (
+          SELECT COUNT(*) FROM generated_candidates
+          WHERE generated_candidates.job_id = generation_jobs.id
+            AND generated_candidates.status <> 'approved'
+        );
+  `);
+}
+
+export async function recoverInterruptedGenerationJobs(db: SQLite.SQLiteDatabase) {
+  const interruptedAt = new Date().toISOString();
+  await db.runAsync(
+    `UPDATE sources
+     SET status = 'failed', ingestion_error = 'Deck preparation was interrupted. Try again.'
+     WHERE id IN (
+       SELECT interrupted_jobs.source_id
+       FROM generation_jobs AS interrupted_jobs
+       WHERE interrupted_jobs.status IN ('running', 'publishing')
+         AND interrupted_jobs.source_id IS NOT NULL
+         AND interrupted_jobs.id = (
+           SELECT latest_generation_jobs.id
+           FROM generation_jobs AS latest_generation_jobs
+           WHERE latest_generation_jobs.source_id = interrupted_jobs.source_id
+           ORDER BY latest_generation_jobs.created_at DESC, latest_generation_jobs.rowid DESC
+           LIMIT 1
+         )
+     )`,
+  );
+  await db.runAsync(
+    `UPDATE generation_jobs
+     SET status = 'failed', generation_mode = 'FAILED',
+         summary = 'Deck preparation was interrupted. Try again.',
+         failure_reason = 'interrupted', updated_at = ?
+     WHERE status IN ('running', 'publishing')`,
+    interruptedAt,
+  );
+  await normalizeGenerationJobProvenance(db);
 }
 
 async function ensureDefaultCourseStructure(db: SQLite.SQLiteDatabase) {
@@ -1073,6 +1247,9 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_decks_visibility ON decks(deleted_at, archived_at, updated_at);
     CREATE INDEX IF NOT EXISTS idx_decks_copy_lineage ON decks(copied_from_deck_id);
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_source_id ON generation_jobs(source_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_jobs_active_source
+      ON generation_jobs(source_id)
+      WHERE status IN ('running', 'publishing');
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_request_id ON generation_jobs(request_id);
     CREATE INDEX IF NOT EXISTS idx_card_learning_weak ON card_learning_state(is_suspended, weak_score DESC);
     CREATE INDEX IF NOT EXISTS idx_card_learning_buried ON card_learning_state(buried_until, is_suspended);
@@ -1093,6 +1270,8 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_card_mode_mastery_due ON card_mode_mastery(short_due_at);
     CREATE INDEX IF NOT EXISTS idx_study_blocks_start ON study_blocks(status, starts_at);
     CREATE INDEX IF NOT EXISTS idx_game_sessions_status ON game_sessions(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bari_conversations_context ON bari_conversations(context_type, context_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bari_messages_conversation ON bari_messages(conversation_id, created_at ASC);
     CREATE INDEX IF NOT EXISTS idx_game_events_session ON game_events(session_id, occurred_at);
   `);
 }

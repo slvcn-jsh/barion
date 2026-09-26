@@ -68,4 +68,68 @@ describe('grounded card prompt', () => {
     expect(request.minCandidates).toBe(8);
     expect(request.maxCandidates).toBe(56);
   });
+
+  it('caps dev remote payload segments and maxCandidates in development mode', () => {
+    const previous = process.env.NODE_ENV;
+    const previousShape = process.env.BARION_FORCE_DEV_REMOTE_SHAPE;
+    process.env.NODE_ENV = 'development';
+    process.env.BARION_FORCE_DEV_REMOTE_SHAPE = '1';
+    try {
+      const request = buildGroundedCardRequest({
+        requestId: 'request-dev-shape',
+        sourceId: 'source-1',
+        sourceTitle: 'Dev',
+        maxCandidates: 56,
+        segments: Array.from({ length: 50 }, (_, index) => ({
+          segmentId: `segment-${index}`,
+          locator: `Page ${index + 1}`,
+          sectionPath: 'Section',
+          text: 'a '.repeat(3000),
+        })),
+      });
+
+      expect(request.maxCandidates).toBeLessThanOrEqual(16);
+      expect(JSON.parse(request.userPrompt).segments.length).toBeLessThanOrEqual(8);
+    } finally {
+      process.env.NODE_ENV = previous;
+      if (previousShape === undefined) delete process.env.BARION_FORCE_DEV_REMOTE_SHAPE;
+      else process.env.BARION_FORCE_DEV_REMOTE_SHAPE = previousShape;
+    }
+  });
+
+  it('includes conceptTargets in user prompt when provided', () => {
+    const request = buildGroundedCardRequest({
+      requestId: 'request-concept',
+      sourceId: 'source-concept',
+      sourceTitle: 'Pharmacology',
+      maxCandidates: 10,
+      segments: [{ segmentId: 'seg-1', locator: 'Page 1', sectionPath: 'Metformin', text: 'Metformin reduces hepatic glucose production and improves insulin sensitivity.' }],
+      conceptTargets: [
+        { term: 'Metformin', detail: 'reduces hepatic glucose', importance: 'high', emphasis: 'treatment', segmentIds: ['seg-1'], locator: 'Page 1' },
+        { term: 'insulin sensitivity', detail: 'type 2 diabetes mechanism', importance: 'standard', emphasis: 'mechanism', segmentIds: ['seg-1'], locator: 'Page 1' },
+      ],
+    });
+    const payload = JSON.parse(request.userPrompt);
+    expect(payload.conceptTargets).toBeDefined();
+    expect(payload.conceptTargets.length).toBeGreaterThan(0);
+    expect(payload.conceptTargets[0].term).toBe('Metformin');
+    expect(payload.conceptTargets[0].importance).toBe('high');
+  });
+
+  it('omits conceptTargets from user prompt when not provided', () => {
+    const request = buildGroundedCardRequest({
+      requestId: 'request-no-concepts',
+      sourceId: 'source-no-concepts',
+      sourceTitle: 'Study',
+      maxCandidates: 5,
+      segments: [{ segmentId: 'seg-1', locator: 'Page 1', sectionPath: 'Section', text: 'Beta blockers reduce mortality in heart failure patients.' }],
+    });
+    const payload = JSON.parse(request.userPrompt);
+    expect(payload.conceptTargets).toBeUndefined();
+  });
+
+  it('system prompt instructs model to prioritize named concept targets', () => {
+    expect(GROUNDED_CARD_PROMPT.systemPrompt).toContain('conceptTargets');
+    expect(GROUNDED_CARD_PROMPT.systemPrompt).toContain('prioritize coverage');
+  });
 });

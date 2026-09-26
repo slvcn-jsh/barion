@@ -1,5 +1,5 @@
 export const BARION_BACKUP_FORMAT = 'barion-learning-backup';
-export const BARION_BACKUP_VERSION = 3;
+export const BARION_BACKUP_VERSION = 4;
 export const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
 export const MAX_BACKUP_ROWS = 250_000;
 
@@ -31,6 +31,8 @@ export const backupTableNames = [
   'test_sessions',
   'test_responses',
   'library_trash',
+  'bari_conversations',
+  'bari_messages',
 ] as const;
 
 const VERSION_TWO_TABLES = new Set([
@@ -43,6 +45,11 @@ const VERSION_TWO_TABLES = new Set([
 
 const VERSION_THREE_TABLES = new Set([
   'source_study_guides',
+]);
+
+const VERSION_FOUR_TABLES = new Set([
+  'bari_conversations',
+  'bari_messages',
 ]);
 
 export type BackupTableName = (typeof backupTableNames)[number];
@@ -122,6 +129,8 @@ export function parseBackupEnvelope(serialized: string): BarionBackupEnvelope {
     const rows = sourceFormatVersion === 1 && storedRows === undefined && VERSION_TWO_TABLES.has(tableName)
       ? []
       : sourceFormatVersion < 3 && storedRows === undefined && VERSION_THREE_TABLES.has(tableName)
+      ? []
+      : sourceFormatVersion < 4 && storedRows === undefined && VERSION_FOUR_TABLES.has(tableName)
       ? []
       : storedRows;
     if (!Array.isArray(rows)) throw new Error(`The backup is missing ${tableName}.`);

@@ -32,6 +32,28 @@ describe('gateway card quality', () => {
       .toContain('question depends on source wording');
   });
 
+  it('penalizes multi-part compound kitchen-sink questions for violating atomicity', () => {
+    const compoundCard = {
+      ...strongCard,
+      question: 'What is lithium toxicity, what causes it, and how is it treated?',
+    };
+    const score = evaluateGatewayCardQuality(compoundCard);
+    expect(score).toBeLessThan(0.82);
+    expect(describeGatewayCardQuality(compoundCard, score))
+      .toContain('question is compound rather than atomic');
+  });
+
+  it('penalizes mechanically transformed questions that copy sentence structures', () => {
+    const mechanicalCard = {
+      ...strongCard,
+      question: 'What may occur when serum levels become elevated?',
+    };
+    const score = evaluateGatewayCardQuality(mechanicalCard);
+    expect(score).toBeLessThan(0.82);
+    expect(describeGatewayCardQuality(mechanicalCard, score))
+      .toContain('question is mechanically transformed from source text');
+  });
+
   it('penalizes answers missing required structure and reports the reason', () => {
     const unstructuredCard = { ...strongCard, answer: 'It reduces hepatic glucose production.' };
     const score = evaluateGatewayCardQuality(unstructuredCard);
@@ -55,9 +77,9 @@ describe('gateway card quality', () => {
     expect(evaluateGatewayCardQuality(strongCard)).toBeLessThanOrEqual(0.98);
   });
 
-  it('auto-publishes only threshold-passing local extractive candidates', () => {
+  it('allows any evaluated threshold-passing candidate into publication', () => {
     expect(shouldAutoPublishCandidate(0.82, true, 0.82)).toBe(true);
     expect(shouldAutoPublishCandidate(0.81, true, 0.82)).toBe(false);
-    expect(shouldAutoPublishCandidate(0.98, false, 0.82)).toBe(false);
+    expect(shouldAutoPublishCandidate(0.98, false, 0.82)).toBe(true);
   });
 });

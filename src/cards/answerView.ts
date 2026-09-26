@@ -25,17 +25,18 @@ export function parseAnswerSections(answer: string): ParsedAnswerSection[] {
     .filter(Boolean);
 
   const sections = lines.map((line) => {
-    const match = line.match(/^([A-Za-z][A-Za-z ]{1,42}):\s*(.+)$/);
+    const match = line.match(/^(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?([A-Za-z][A-Za-z ]{1,42})(?:\*{1,2})?:\s*(?:\*{1,2})?\s*(.+)$/);
     if (!match) {
-      return { body: line };
+      return { body: line.replace(/^[\s*_]+|[\s*_]+$/g, "") };
     }
 
     const label = match[1].trim();
     if (!KNOWN_LABELS.has(label.toLowerCase())) {
-      return { body: line };
+      return { body: line.replace(/^[\s*_]+|[\s*_]+$/g, "") };
     }
 
-    return { label, body: match[2].trim() };
+    const body = match[2].trim().replace(/^[\s*_]+|[\s*_]+$/g, "");
+    return { label, body };
   });
 
   return sections.length ? sections : [{ body: answer.trim() }];

@@ -6,7 +6,7 @@ from .models import Card, NormalizedCard, SourceReference
 from .text import canonical_json, sha256_text
 
 NORMALIZATION_VERSION = "1.0.0"
-_LABEL = re.compile(r"(?im)^\s*(answer|why\s+it\s+matters|study\s+note)\s*:\s*")
+_LABEL = re.compile(r"(?im)^\s*(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?\s*(answer|why\s+it\s+matters|study\s+note)\s*(?:\*{1,2})?\s*[:\-]\s*(?:\*{1,2})?\s*")
 
 
 def normalize_card(card: Card) -> NormalizedCard:
@@ -73,4 +73,5 @@ def _parse_answer(answer: str, system: str, warnings: list[str]) -> tuple[str, s
 
 
 def _clean(value: str) -> str:
-    return re.sub(r"\s+", " ", value).strip()
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return re.sub(r"^[\s*_]+|[\s*_]+$", "", cleaned).strip()

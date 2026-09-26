@@ -61,3 +61,6 @@ venv/
 .opencode/
 .windsurf/
 services/ai_gateway/venv/
+
+# Local temporary and test artifacts
+.tmp*

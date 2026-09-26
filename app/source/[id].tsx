@@ -8,6 +8,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ScreenState';
 import { getSourceStatusMeta, SourceStatusPill } from '@/components/SourceStatusPill';
 import { StructuredAnswer } from '@/components/StructuredAnswer';
+import { describeStudentGeneration, GENERATION_FAILURE_ALERT } from '@/ai/generationExperience';
 import type { GeneratedCandidate, SourceDetail } from '@/domain/types';
 import { initializeDatabase } from '@/storage/database';
 import {
@@ -76,8 +77,6 @@ export default function SourceDetailScreen() {
     () => source?.candidates.filter((candidate) => candidate.status === 'pending') ?? [],
     [source],
   );
-  const rejectedCount = source?.candidates.filter((candidate) => candidate.status === 'rejected').length ?? 0;
-
   async function runAction(key: string, action: () => Promise<unknown>) {
     setActionId(key);
     try {
@@ -87,6 +86,29 @@ export default function SourceDetailScreen() {
       Alert.alert('That action did not finish', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setActionId(null);
+    }
+  }
+
+  async function runGeneration() {
+    if (!source) return;
+    setActionId('generate');
+    let failed = false;
+    try {
+      await generateDraftsForSource(source.id);
+    } catch {
+      failed = true;
+    }
+
+    try {
+      await refresh();
+    } catch {
+      failed = true;
+    } finally {
+      setActionId(null);
+    }
+
+    if (failed) {
+      Alert.alert(GENERATION_FAILURE_ALERT.title, GENERATION_FAILURE_ALERT.body);
     }
   }
 
@@ -159,6 +181,11 @@ export default function SourceDetailScreen() {
           : 1;
   const readyCardCount = Math.max(0, source.sourceCardCount - source.needsReviewCardCount);
   const guide = source.studyGuide;
+  const generationExperience = describeStudentGeneration(
+    source.generationJob,
+    source.sourceCardCount,
+    source.defaultDeckTitle || 'this source set',
+  );
   const visibleOutline = guide ? guide.outline.slice(0, showFullGuide ? guide.outline.length : 4) : [];
   const visibleQuickReference = guide ? guide.quickReference.slice(0, showFullGuide ? guide.quickReference.length : 8) : [];
   const visibleQuestions = guide ? guide.discussionQuestions.slice(0, showFullGuide ? guide.discussionQuestions.length : 3) : [];
@@ -232,7 +259,7 @@ export default function SourceDetailScreen() {
             <AppButton icon="add" label="Choose another file" variant="secondary" onPress={() => router.replace('/sources')} />
           </View>
         ) : null}
-        {isBusy ? <Text style={styles.busyNote}>Keep Barion open until this local processing step finishes.</Text> : null}
+        {isBusy ? <Text style={styles.busyNote}>Keep Barion open until deck preparation finishes.</Text> : null}
       </View>
 
       {guide ? (
@@ -359,6 +386,12 @@ export default function SourceDetailScreen() {
               {readyCardCount} ready card{readyCardCount === 1 ? '' : 's'} · {source.needsReviewCardCount} held for source check
             </Text>
           </View>
+          {generationExperience.basicModeNotice ? (
+            <View style={styles.basicModeNotice}>
+              <Ionicons name="cloud-offline-outline" size={18} color={colors.blueDark} />
+              <Text style={styles.basicModeText}>{generationExperience.basicModeNotice}</Text>
+            </View>
+          ) : null}
           <AppButton
             disabled={!readyCardCount}
             icon="play"
@@ -548,11 +581,8 @@ export default function SourceDetailScreen() {
             <Ionicons name="checkmark-done" size={26} color={colors.green} />
           </View>
           <View style={styles.completeCopy}>
-            <Text style={styles.cardTitle}>Your study set is ready</Text>
-            <Text style={styles.bodyText}>
-              {source.sourceCardCount} cards are organized in {source.defaultDeckTitle || 'this source set'}.
-              {rejectedCount ? ` ${rejectedCount} low-value draft${rejectedCount === 1 ? ' was' : 's were'} left out.` : ''}
-            </Text>
+            <Text style={styles.cardTitle}>{generationExperience.title}</Text>
+            <Text style={styles.bodyText}>{generationExperience.body}</Text>
           </View>
           {source.sha256 === 'built-in-curated-demo-v1' ? (
             <View style={styles.curatedBadge}><Ionicons name="shield-checkmark" size={16} color={colors.tealDark} /><Text style={styles.curatedText}>Curated demo set</Text></View>
@@ -562,7 +592,7 @@ export default function SourceDetailScreen() {
               label={actionId === 'generate' ? 'Refreshing…' : 'Refresh from source'}
               icon="refresh-outline"
               variant="secondary"
-              onPress={() => void runAction('generate', () => generateDraftsForSource(source.id))}
+              onPress={() => void runGeneration()}
             />
           )}
         </View>
@@ -773,6 +803,8 @@ const styles = StyleSheet.create({
   answerInput: { minHeight: 104 },
   badgeRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' },
   bodyText: { color: colors.muted, fontFamily: fonts.regular, fontSize: 13, lineHeight: 20 },
+  basicModeNotice: { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: radii.md, flexBasis: '100%', flexDirection: 'row', gap: 9, padding: 12 },
+  basicModeText: { color: colors.blueDark, flex: 1, fontFamily: fonts.medium, fontSize: 12, lineHeight: 18 },
   busyNote: { color: colors.blueDark, fontFamily: fonts.semibold, fontSize: 12, textAlign: 'center' },
   candidateActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   candidateCard: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.lg, borderWidth: 1, gap: 15, padding: 18 },

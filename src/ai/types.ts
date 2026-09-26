@@ -14,6 +14,14 @@ export type CardGenerationInput = {
   sourceTitle: string;
   segments: SourceContext[];
   maxCandidates: number;
+  conceptTargets?: Array<{
+    term: string;
+    detail: string;
+    importance: 'critical' | 'high' | 'standard';
+    emphasis: 'safety' | 'treatment' | 'clinical' | 'mechanism' | 'definition' | 'overview';
+    segmentIds: string[];
+    locator: string;
+  }>;
 };
 
 export type ProviderGenerationRequest = {
@@ -59,12 +67,18 @@ export type GroundedCardCandidate = {
 
 export type CardGenerationProvenance = {
   requestId: string;
+  generationMode: GenerationMode;
+  fallbackUsed: boolean;
   providerRequestId?: string;
   providerId: string;
   modelId: string;
+  attemptedProviderId?: string;
+  attemptedModelId?: string;
   promptId: string;
   promptVersion: string;
   generatedAt: string;
+  remoteCandidateCount: number;
+  durationMs: number;
   usage?: ProviderUsage;
   fallbackReason?: string;
 };
@@ -82,6 +96,8 @@ export type AITelemetryEvent = {
   promptVersion: string;
   durationMs: number;
   success: boolean;
+  generationMode?: GenerationMode;
+  fallbackUsed?: boolean;
   candidateCount?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -91,3 +107,49 @@ export type AITelemetryEvent = {
 export interface AITelemetrySink {
   record(event: AITelemetryEvent): void;
 }
+
+export type GenerationMode =
+  | 'REMOTE_AI'
+  | 'LOCAL_FALLBACK'
+  | 'PARTIAL_REMOTE_WITH_FALLBACK'
+  | 'FAILED';
+
+export type BariChatSourceSegment = {
+  segmentId: string;
+  locator: string;
+  sectionPath: string;
+  text: string;
+};
+
+export type BariCitation = {
+  segmentId?: string;
+  locator?: string;
+  sectionPath?: string;
+  text?: string;
+};
+
+export type BariChatRequestPayload = {
+  conversationId?: string;
+  message: string;
+  mode?: 'source-strict' | 'explain';
+  sourceScope?: Record<string, unknown>;
+  courseId?: string;
+  deckId?: string;
+  documentIds?: string[];
+  evidence?: BariChatSourceSegment[];
+};
+
+export type BariGenerationInfo = {
+  provider?: string;
+  model?: string;
+  requestId: string;
+};
+
+export type BariChatResponsePayload = {
+  message: string;
+  citations: BariCitation[];
+  evidence: BariChatSourceSegment[];
+  actions?: Array<Record<string, unknown>>;
+  warnings?: string[];
+  generation: BariGenerationInfo;
+};

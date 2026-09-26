@@ -344,7 +344,11 @@ function sanitizedCandidate(
 }
 
 function parseStructuredAnswer(value: string) {
-  const matches = [...value.matchAll(/^\s*(answer|why\s+it\s+matters|study\s+note)\s*:\s*/gim)];
+  const matches = [
+    ...value.matchAll(
+      /^\s*(?:\d+[.)]\s*)?(?:[-•*]\s*)?(?:\*{1,2})?\s*(answer|why\s+it\s+matters|study\s+note)\s*(?:\*{1,2})?\s*[:\-]\s*(?:\*{1,2})?\s*/gim,
+    ),
+  ];
   if (!matches.length) return null;
   const output = { core: '', explanation: '', studyNote: '' };
   const seen = new Set<string>();
@@ -354,7 +358,7 @@ function parseStructuredAnswer(value: string) {
     seen.add(label);
     const start = (match.index ?? 0) + match[0].length;
     const end = index + 1 < matches.length ? matches[index + 1].index ?? value.length : value.length;
-    const text = value.slice(start, end).replace(/\s+/g, ' ').trim();
+    const text = value.slice(start, end).replace(/\s+/g, ' ').trim().replace(/^[\s*_]+|[\s*_]+$/g, '');
     if (label === 'answer') output.core = text;
     if (label === 'why it matters') output.explanation = text;
     if (label === 'study note') output.studyNote = text;

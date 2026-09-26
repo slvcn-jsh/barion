@@ -41,11 +41,14 @@ describe('generateGroundedCards', () => {
     }, { record: (event) => events.push(event) });
 
     expect(result.provenance).toEqual(expect.objectContaining({
+      generationMode: 'REMOTE_AI',
+      fallbackUsed: false,
       providerId: 'upstream-provider',
       modelId: 'upstream-model',
       promptId: 'grounded-card-generation',
       promptVersion: '1.2.0',
       providerRequestId: 'provider-request-1',
+      remoteCandidateCount: 1,
     }));
     expect(events).toHaveLength(1);
     expect(events[0]).toEqual(expect.objectContaining({ success: true, candidateCount: 1 }));
@@ -70,7 +73,13 @@ describe('generateGroundedCards', () => {
     const malformedProvider: CardGenerationProvider = {
       ...provider,
       async generate() {
-        return { output: { candidates: [{ evidenceText: 'invented' }] } };
+        return {
+          providerRequestId: 'malformed-request-1',
+          providerId: 'upstream-provider',
+          modelId: 'upstream-model',
+          usage: { inputTokens: 11, outputTokens: 7 },
+          output: { candidates: [{ evidenceText: 'invented' }] },
+        };
       },
     };
     const localCandidates = [{
@@ -99,10 +108,17 @@ describe('generateGroundedCards', () => {
       evidenceSpan: expect.objectContaining({ status: 'exact', startOffset: 0, endOffset: 30 }),
     })]);
     expect(result.provenance).toEqual(expect.objectContaining({
+      generationMode: 'LOCAL_FALLBACK',
+      fallbackUsed: true,
       providerId: 'local-extractive',
       modelId: 'barion-extractive-rules',
+      attemptedProviderId: 'upstream-provider',
+      attemptedModelId: 'upstream-model',
+      providerRequestId: 'malformed-request-1',
       promptVersion: 'extractive-v1',
       fallbackReason: 'invalid_provider_response',
+      remoteCandidateCount: 1,
+      usage: { inputTokens: 11, outputTokens: 7 },
     }));
   });
 
@@ -113,6 +129,8 @@ describe('generateGroundedCards', () => {
     }, () => []);
 
     expect(result.provenance.providerId).toBe('local-extractive');
-    expect(result.provenance.fallbackReason).toBeUndefined();
+    expect(result.provenance.generationMode).toBe('LOCAL_FALLBACK');
+    expect(result.provenance.fallbackUsed).toBe(true);
+    expect(result.provenance.fallbackReason).toBe('gateway_not_configured');
   });
 });

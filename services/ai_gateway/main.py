@@ -120,6 +120,10 @@ def create_app(
             "validator": "ok",
         }
 
+    @app.get("/v1/auth-check", dependencies=[Depends(auth)])
+    async def auth_check() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.post(
         "/v1/card-generation",
         response_model=CardGenerationResponse,
@@ -158,6 +162,7 @@ def _create_authenticator(settings: GatewaySettings) -> GatewayAuthenticator:
 
 def _gateway_error_response(error: GatewayError) -> JSONResponse:
     headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
+    diagnostics = error.diagnostics or {}
     return JSONResponse(
         status_code=error.status_code,
         headers=headers,
@@ -167,6 +172,12 @@ def _gateway_error_response(error: GatewayError) -> JSONResponse:
                 "message": error.message,
                 "recoverable": error.recoverable,
                 "requestId": str(uuid4()),
+                "provider": error.provider,
+                "model": diagnostics.get("model"),
+                "providerRequestId": diagnostics.get("providerRequestId"),
+                "inputTokens": diagnostics.get("inputTokens"),
+                "outputTokens": diagnostics.get("outputTokens"),
+                "remoteCandidateCount": diagnostics.get("remoteCandidateCount"),
             }
         },
     )

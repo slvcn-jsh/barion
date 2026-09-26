@@ -1,3 +1,5 @@
+import { buildBariCardEvidence } from '@/ai/bariChat';
+import { BariChatModal } from '@/components/BariChatModal';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Speech from 'expo-speech';
@@ -43,6 +45,7 @@ export default function StudyScreen() {
   const [revealed, setRevealed] = useState(false);
   const [startedAt, setStartedAt] = useState(Date.now());
   const [lastReviewed, setLastReviewed] = useState<StudyCard | null>(null);
+  const [bariChatOpen, setBariChatOpen] = useState(false);
   const [sessionTotal, setSessionTotal] = useState(0);
   const [profile, setProfile] = useState<StudyProfile | null>(null);
   const [session, setSession] = useState<ActiveStudySession | null>(null);
@@ -358,7 +361,7 @@ export default function StudyScreen() {
             color={trust.tone === 'review' ? '#9a5b09' : colors.tealDark}
           />
           <Text style={[styles.safetyNoticeText, trust.tone === 'review' && styles.safetyNoticeTextWarn]}>
-            {trust.label}: {trust.detail}
+            This card is pending source confirmation and has been held out of normal study.
           </Text>
         </View>
       ) : null}
@@ -393,6 +396,8 @@ export default function StudyScreen() {
         </View>
       ) : null}
 
+      <AppButton icon="sparkles-outline" label="Ask Bari" variant="quiet" onPress={() => setBariChatOpen(true)} />
+
       {engineMode === 'audio' ? (
         <View style={styles.audioBar}>
           <AppButton icon="volume-high-outline" label="Question" variant="secondary" onPress={speakQuestion} />
@@ -426,7 +431,7 @@ export default function StudyScreen() {
             <View style={styles.gradeGrid}>
               <RatingButton label="Again" helper={intervalLabels?.again ?? 'Soon'} tone="danger" onPress={() => void grade('again')} />
               <RatingButton label="Hard" helper={intervalLabels?.hard ?? 'Soon'} tone="warn" onPress={() => void grade('hard')} />
-              <RatingButton label="Okay" helper={intervalLabels?.good ?? 'Later'} tone="primary" onPress={() => void grade('good')} />
+              <RatingButton label="Good" helper={intervalLabels?.good ?? 'Later'} tone="primary" onPress={() => void grade('good')} />
               <RatingButton label="Easy" helper={intervalLabels?.easy ?? 'Later'} tone="calm" onPress={() => void grade('easy')} />
             </View>
           )}
@@ -453,6 +458,16 @@ export default function StudyScreen() {
       onCancel={() => setReviewHoldCard(null)}
       onConfirm={() => void holdForSourceCheck()}
     />
+    {current ? (
+      <BariChatModal
+        visible={bariChatOpen}
+        onClose={() => setBariChatOpen(false)}
+        contextType="card"
+        contextId={current.id}
+        contextTitle={current.prompt}
+        evidence={buildBariCardEvidence(current, current.evidence)}
+      />
+    ) : null}
     </>
   );
 }

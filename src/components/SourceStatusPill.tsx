@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
-import type { SourceStatus } from '@/domain/types';
+import { normalizeSourceStatus, type SourceStatus } from '@/domain/types';
 import { colors, fonts, radii } from '@/theme/colors';
 
-export function getSourceStatusMeta(status: SourceStatus) {
-  switch (status) {
+export function getSourceStatusMeta(status: unknown) {
+  switch (normalizeSourceStatus(status)) {
     case 'importing':
       return { label: 'Saving file', description: 'Keeping a local source record.', progress: 0.16, tone: 'active' as const };
     case 'parsing':
@@ -21,6 +21,13 @@ export function getSourceStatusMeta(status: SourceStatus) {
     case 'failed':
       return { label: 'Could not process', description: 'Review the issue and try again.', progress: 0, tone: 'danger' as const };
   }
+
+  return {
+    label: 'Needs attention',
+    description: 'A quick action is needed to continue.',
+    progress: 0.25,
+    tone: 'warning' as const,
+  };
 }
 
 export function SourceStatusPill({ status }: { status: SourceStatus }) {

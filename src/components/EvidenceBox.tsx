@@ -38,7 +38,7 @@ export function EvidenceBox({ evidence }: Props) {
       </View>
       <Text style={styles.locator}>{evidence.locator}</Text>
       <Text style={styles.text}>{evidence.text}</Text>
-      <Text style={[styles.support, toneStyle]}>{trust.label} - {trust.detail}</Text>
+      <Text style={[styles.support, toneStyle]}>Source-linked card</Text>
     </View>
   );
 }

@@ -150,6 +150,57 @@ describe('createGatewayCardGenerationProvider', () => {
     await expect(promise).rejects.toEqual(expect.objectContaining({ code, httpStatus: status }));
   });
 
+  it('preserves provider-unavailable gateway failures for diagnostics', async () => {
+    const fetchImplementation = jest.fn(async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: { code: 'provider_unavailable' } }),
+    })) as unknown as typeof fetch;
+
+    await expect(createGatewayCardGenerationProvider(config, fetchImplementation).generate(request))
+      .rejects.toEqual(expect.objectContaining({
+        code: 'provider_unavailable',
+        recoverable: true,
+        httpStatus: 503,
+      }));
+  });
+
+  it.each([
+    ['invalid_provider_response', 'invalid_provider_response'],
+    ['insufficient_candidates', 'insufficient_evidence'],
+    ['provider_authentication_error', 'authentication_error'],
+    ['model_not_allowed', 'configuration_error'],
+    ['invalid_request', 'configuration_error'],
+  ])('maps gateway error code %s to %s', async (gatewayCode, expectedCode) => {
+    const fetchImplementation = jest.fn(async () => ({
+      ok: false,
+      status: 502,
+      json: async () => ({
+        error: {
+          code: gatewayCode,
+          recoverable: true,
+          provider: 'gemini',
+          model: 'gemini-test',
+          providerRequestId: 'provider-request-error',
+          inputTokens: 14,
+          outputTokens: 6,
+          remoteCandidateCount: 2,
+        },
+      }),
+    })) as unknown as typeof fetch;
+
+    await expect(createGatewayCardGenerationProvider(config, fetchImplementation).generate(request))
+      .rejects.toEqual(expect.objectContaining({
+        code: expectedCode,
+        providerId: 'gemini',
+        modelId: 'gemini-test',
+        providerRequestId: 'provider-request-error',
+        inputTokens: 14,
+        outputTokens: 6,
+        remoteCandidateCount: 2,
+      }));
+  });
+
   it('maps invalid JSON to invalid provider response', async () => {
     const fetchImplementation = jest.fn(async () => ({
       ok: true,
