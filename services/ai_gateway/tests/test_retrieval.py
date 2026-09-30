@@ -222,3 +222,76 @@ async def test_hybrid_retriever_empty():
     )
     results = await retriever.retrieve_evidence(request, max_segments=3)
     assert results == []
+
+from ..retrieval import GeminiEmbeddingProvider
+import httpx
+
+
+@pytest.mark.asyncio
+async def test_gemini_embedding_provider_caching_and_fallback():
+    provider = GeminiEmbeddingProvider(
+        api_key="test-key",
+        model="text-embedding-004",
+        dimension=64,
+        fallback_provider=MockEmbeddingProvider(dimension=64),
+    )
+
+    texts = ["metformin pharmacology", "beta blocker mechanism", "metformin pharmacology"]
+    embeddings = await provider.embed_texts(texts)
+
+    assert len(embeddings) == 3
+    assert len(embeddings[0]) == 64
+    assert embeddings[0] == embeddings[2]  # Cache hit returns identical vector
+    assert "metformin pharmacology" in provider._cache
+
+
+@pytest.mark.asyncio
+async def test_gemini_embedding_provider_batching():
+    provider = GeminiEmbeddingProvider(
+        api_key="test-key",
+        max_batch_size=2,
+        dimension=32,
+        fallback_provider=MockEmbeddingProvider(dimension=32),
+    )
+    texts = [f"segment text number {i}" for i in range(5)]
+    embeddings = await provider.embed_texts(texts)
+    assert len(embeddings) == 5
+    assert all(len(vec) == 32 for vec in embeddings)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_quality_benchmark():
+    corpus = [
+        SourceSegment(segmentId="s1", locator="p. 10", sectionPath="Cardio", text="ACE inhibitors such as lisinopril cause dry cough in ~10% of patients due to bradykinin accumulation."),
+        SourceSegment(segmentId="s2", locator="p. 15", sectionPath="Endo", text="Normal fasting plasma glucose is 70-99 mg/dL; HbA1c < 5.7% is normal."),
+        SourceSegment(segmentId="s3", locator="p. 20", sectionPath="Renal", text="Acute kidney injury (AKI) is defined by an increase in serum creatinine by ≥ 0.3 mg/dL within 48 hours."),
+        SourceSegment(segmentId="s4", locator="p. 25", sectionPath="Micro", text="Pseudomonas aeruginosa is an oxidase-positive, gram-negative rod producing pyocyanin."),
+        SourceSegment(segmentId="s5", locator="p. 30", sectionPath="Pharm", text="β1-blockers like atenolol decrease chronotropy and inotropy in the myocardium."),
+    ]
+    retriever = HybridRetriever(embedding_provider=MockEmbeddingProvider(dimension=64))
+    await retriever.index_segments(corpus)
+
+    test_queries = [
+        ("Why does lisinopril cause a dry cough?", "s1"),
+        ("What is the normal fasting plasma glucose and HbA1c?", "s2"),
+        ("AKI diagnostic criteria serum creatinine cutoff", "s3"),
+        ("Oxidase positive gram negative rod pyocyanin", "s4"),
+        ("β1-blocker atenolol cardiac effect", "s5"),
+    ]
+
+    top1_hits = 0
+    top3_hits = 0
+    for query, target_id in test_queries:
+        req = BariChatRequest(message=query, mode="source-strict")
+        results = await retriever.retrieve_evidence(req, max_segments=3)
+        segment_ids = [r.segmentId for r in results]
+        if segment_ids and segment_ids[0] == target_id:
+            top1_hits += 1
+        if target_id in segment_ids:
+            top3_hits += 1
+
+    recall_at_3 = top3_hits / len(test_queries)
+    recall_at_1 = top1_hits / len(test_queries)
+
+    assert recall_at_3 == 1.0, f"Recall@3 should be 100%, got {recall_at_3}"
+    assert recall_at_1 >= 0.8, f"Recall@1 should be >= 80%, got {recall_at_1}"

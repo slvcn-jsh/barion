@@ -20,4 +20,11 @@ describe('getSourceStatusMeta', () => {
       tone: 'success',
     });
   });
+
+  it('shows queued generation as waiting instead of active or failed', () => {
+    expect(getSourceStatusMeta('waiting-for-generation')).toMatchObject({
+      label: 'Waiting for Smart Generation',
+      tone: 'waiting',
+    });
+  });
 });

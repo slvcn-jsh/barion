@@ -1,0 +1,240 @@
+{
+  "authorizationSha256": "058344a5b81e611d405a9c75f2cd7ff8ee7d37110ab4a405fc235c70b602c232",
+  "dataUse": {
+    "authorizationBasis": "owner-declared",
+    "authorizedAt": "2026-09-30T11:52:45.2903223+08:00",
+    "containsSensitiveData": false,
+    "evaluationUseAuthorized": true,
+    "licenseUsageStatus": "approved",
+    "publicDistributionAuthorized": false,
+    "trainingConsent": "explicit",
+    "trainingEligibility": "candidate",
+    "trainingUseAuthorized": true
+  },
+  "hiddenEvaluationArtifactCount": 8,
+  "hiddenEvaluationArtifacts": [
+    {
+      "bytes": 2714,
+      "relativePath": "evaluation/BENCHMARK_PROTOCOL.md",
+      "sha256": "6833ecaa92566641ca8edc214ace0469ff1045e00412a1ea6fee8c8f78750424"
+    },
+    {
+      "bytes": 1576,
+      "relativePath": "evaluation/BLIND_EVALUATOR_PROMPT.md",
+      "sha256": "f3f776974e5b94199b35840ad2ec5c200a8eaf6967a14e72d58913059f67bc86"
+    },
+    {
+      "bytes": 1039,
+      "relativePath": "evaluation/COMPARISON_WORKSHEET.md",
+      "sha256": "03f15ec2a9f504d1fb576275780c247b24c035881e03a1a0a1e7506f7e0d5ccc"
+    },
+    {
+      "bytes": 12357,
+      "relativePath": "evaluation/gold_concepts.csv",
+      "sha256": "945f49390598a062ffc0d06a8f9cf197ebff375c51ae92d195c891cbfd39a686"
+    },
+    {
+      "bytes": 19193,
+      "relativePath": "evaluation/gold_standard.json",
+      "sha256": "ed1f4630ff6205f0f64ef800923c4861564bf37544f2ffe5d1e18020ea0266f8"
+    },
+    {
+      "bytes": 15238,
+      "relativePath": "evaluation/GOLD_STANDARD.md",
+      "sha256": "91d1752b0e65b4c26e724e0cbc0c068b3bc37d3a3d05e96f30d5aba79d0887da"
+    },
+    {
+      "bytes": 2156,
+      "relativePath": "evaluation/results_capture_template.csv",
+      "sha256": "9a3c52f18f599a346e6a2377431b0feb6d8abcd6a41ef5c1c4569830321d3595"
+    },
+    {
+      "bytes": 2994,
+      "relativePath": "evaluation/SCORING_RUBRIC.md",
+      "sha256": "34e36232297df26a8c2628fefc40b7e3d049aa9890cce9590c6c868f48509fa4"
+    }
+  ],
+  "invariants": {
+    "goldSeparatedFromInputs": true,
+    "modelOutputIsTrainingTruth": false,
+    "rawContentIncluded": false,
+    "recordLevelReviewRequiredBeforeTraining": true
+  },
+  "manifestSha256": "689aa6b33a9a3f96ae9044681a8c1b5ea9098bf6fb8c6ceda89e35277a4173c1",
+  "packIdentitySha256": "c7c7df8ea606abf9ad1395e178946a628c7c0a598be511ce2a544603b2d40905",
+  "packReference": "barion-quizlet-benchmark-v1",
+  "registryVersion": "1.0.0",
+  "sourceCount": 10,
+  "sources": [
+    {
+      "artifactSha256": "1499cb4ff5bd23c31d6fffdb6ec3f648f3d1cc5c24827d4e0ad831f650fba0b7",
+      "bytes": 49116,
+      "extractedCharacterCount": 7122,
+      "extractedTextSha256": "9520595a27bc11b5c4874326c649d700bb7b996fd3417e97009c47bbad22e051",
+      "format": "PDF",
+      "lengthClass": "long",
+      "pageCount": 2,
+      "primaryTest": "hierarchy, exceptions, relation quality",
+      "relativePath": "inputs/pdf/P01_clean_structured_ANS.pdf",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "P01",
+      "sourceStyle": "clean structured long source"
+    },
+    {
+      "artifactSha256": "ee1ba5f92d57cc5104a70460744d785e9c5a50dfda3bae4ecd27c5f39c41cfe1",
+      "bytes": 48249,
+      "extractedCharacterCount": 5177,
+      "extractedTextSha256": "c1f2d925b8d1c97c9c15f3848fc350b00d3ce7731b0d4ea9294cc8c818ca9987",
+      "format": "PDF",
+      "lengthClass": "medium",
+      "pageCount": 2,
+      "primaryTest": "numbers, units, equations, reasoning",
+      "relativePath": "inputs/pdf/P02_table_numeric_acid_base.pdf",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "P02",
+      "sourceStyle": "table/formula/numeric source"
+    },
+    {
+      "artifactSha256": "3c3206e6594c51f6178bfd97b25a17e1b26af2b9f53d5428e882539b72d2d86d",
+      "bytes": 47952,
+      "extractedCharacterCount": 7082,
+      "extractedTextSha256": "6e37221a984aee44496d5cde4f516d8e2bbb39d022f557d4dee684a4893deddf",
+      "format": "PDF",
+      "lengthClass": "long",
+      "pageCount": 2,
+      "primaryTest": "layout, negation, distractors, case scope",
+      "relativePath": "inputs/pdf/P03_noisy_two_column_infectious_cases.pdf",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "P03",
+      "sourceStyle": "noisy two-column clinical cases"
+    },
+    {
+      "artifactSha256": "8d9ba570e3eabca2340fb4cdd5634c7c409226ba3ec804a476f51c63b6b1d8f1",
+      "bytes": 54185,
+      "extractedCharacterCount": 12642,
+      "extractedTextSha256": "77659d603594b54f497cd9143412bdf08965517204fb103ec7c04731bc5d3100",
+      "format": "PDF",
+      "lengthClass": "very-long",
+      "pageCount": 5,
+      "primaryTest": "long-context coverage balance and late-document recall",
+      "relativePath": "inputs/pdf/P04_long_multisystem_physiology.pdf",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "P04",
+      "sourceStyle": "long multi-section source"
+    },
+    {
+      "artifactSha256": "0e8cef87c86558e4ca236f3e6632834281997c51296fbc475ed42850ecc884bd",
+      "bytes": 5602,
+      "extractedCharacterCount": 5602,
+      "extractedTextSha256": "0e8cef87c86558e4ca236f3e6632834281997c51296fbc475ed42850ecc884bd",
+      "format": "Markdown",
+      "lengthClass": "long",
+      "pageCount": null,
+      "primaryTest": "structure, lesion distinctions",
+      "relativePath": "inputs/markdown/M01_structured_dental_caries.md",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "M01",
+      "sourceStyle": "structured table-heavy notes"
+    },
+    {
+      "artifactSha256": "2382d0ee9dec10e5062d9fc2fa5928d46fb51ffa9797bb084e9f5ebf6860c3c7",
+      "bytes": 3421,
+      "extractedCharacterCount": 3421,
+      "extractedTextSha256": "2382d0ee9dec10e5062d9fc2fa5928d46fb51ffa9797bb084e9f5ebf6860c3c7",
+      "format": "Markdown",
+      "lengthClass": "medium",
+      "pageCount": null,
+      "primaryTest": "mechanism and sequence",
+      "relativePath": "inputs/markdown/M02_compact_inflammation_mechanisms.md",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "M02",
+      "sourceStyle": "compact concept-dense notes"
+    },
+    {
+      "artifactSha256": "7649bfb4c12e530cf4e41eb8627d7dad2747d476d2182059ce3822f91626a747",
+      "bytes": 4204,
+      "extractedCharacterCount": 4204,
+      "extractedTextSha256": "7649bfb4c12e530cf4e41eb8627d7dad2747d476d2182059ce3822f91626a747",
+      "format": "TXT",
+      "lengthClass": "medium",
+      "pageCount": null,
+      "primaryTest": "segmentation and conceptual coverage",
+      "relativePath": "inputs/text/T01_dense_cell_cycle_genetics.txt",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "T01",
+      "sourceStyle": "dense long prose"
+    },
+    {
+      "artifactSha256": "7ec72fcbaeadc05de270ba9fad4fe66a322eed3dfa772c5df87a3d0876259802",
+      "bytes": 2272,
+      "extractedCharacterCount": 2260,
+      "extractedTextSha256": "7ec72fcbaeadc05de270ba9fad4fe66a322eed3dfa772c5df87a3d0876259802",
+      "format": "TXT",
+      "lengthClass": "medium",
+      "pageCount": null,
+      "primaryTest": "normalization, equations, duplicates",
+      "relativePath": "inputs/text/T02_noisy_cardiovascular_rapid_review.txt",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "T02",
+      "sourceStyle": "messy shorthand notes"
+    },
+    {
+      "artifactSha256": "6d154a1d534f15e3e3105f5791c9f71fcd83b8e39814157c6c3baab0ca45152c",
+      "bytes": 1440,
+      "extractedCharacterCount": 1440,
+      "extractedTextSha256": "6d154a1d534f15e3e3105f5791c9f71fcd83b8e39814157c6c3baab0ca45152c",
+      "format": "Paste",
+      "lengthClass": "short",
+      "pageCount": null,
+      "primaryTest": "negation/correction fidelity",
+      "relativePath": "inputs/paste/S01_paste_correction_cranial_nerves.txt",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "S01",
+      "sourceStyle": "correction-heavy short source"
+    },
+    {
+      "artifactSha256": "3e10b3084d698301604926af5cf4792999e19d712eecb2efb6df54d57a80997a",
+      "bytes": 1626,
+      "extractedCharacterCount": 1620,
+      "extractedTextSha256": "3e10b3084d698301604926af5cf4792999e19d712eecb2efb6df54d57a80997a",
+      "format": "Paste",
+      "lengthClass": "short",
+      "pageCount": null,
+      "primaryTest": "source boundaries and unsupported expansion",
+      "relativePath": "inputs/paste/S02_paste_autonomic_pharmacology_matrix.txt",
+      "sensitiveScan": {
+        "piiMatchCount": 0,
+        "secretMatchCount": 0
+      },
+      "sourceId": "S02",
+      "sourceStyle": "compact relation matrix"
+    }
+  ]
+}

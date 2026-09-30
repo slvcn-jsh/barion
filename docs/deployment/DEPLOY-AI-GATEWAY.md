@@ -18,7 +18,10 @@ $env:BARION_AI_AUTH_MODE='static'
 $env:BARION_AI_GATEWAY_AUTH_TOKEN='dev-token-replace-with-random-string'
 $env:GEMINI_API_KEY='AIzaSy...'
 $env:PRIMARY_GENERATION_PROVIDER='gemini'
-$env:PRIMARY_GENERATION_MODEL='gemini-2.5-flash'
+$env:PRIMARY_GENERATION_MODEL='gemini-3.8-flash'
+$env:FALLBACK_GENERATION_MODEL='gemini-3.5-flash-lite'
+$env:BARI_CHAT_MODEL='gemini-3.8-flash'
+$env:BARI_CHAT_FALLBACK_MODEL='gemini-3.5-flash-lite'
 $env:BARION_AI_ALLOWED_ORIGINS='http://localhost:8081,http://127.0.0.1:8081'
 ```
 
@@ -42,7 +45,7 @@ Expected: `{"status": "ok", "generationProvider": {"status": "configured"}}`
 
 ```powershell
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_URL='http://127.0.0.1:8790'
-$env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-2.5-flash'
+$env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-3.8-flash'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS='120000'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN='dev-token-replace-with-random-string'
 ```
@@ -68,7 +71,8 @@ BARION_AI_MAX_ACCESS_TOKEN_LIFETIME_SECONDS=3600
 
 # Generation Provider
 PRIMARY_GENERATION_PROVIDER=gemini
-PRIMARY_GENERATION_MODEL=gemini-2.5-flash
+PRIMARY_GENERATION_MODEL=gemini-3.8-flash
+FALLBACK_GENERATION_MODEL=gemini-3.5-flash-lite
 GEMINI_API_KEY=AIzaSy...
 
 # CORS (production origins)
@@ -77,6 +81,8 @@ BARION_AI_ALLOWED_ORIGINS=https://app.example.com
 # Limits
 BARION_AI_PROVIDER_TIMEOUT_SECONDS=20
 BARION_AI_PROVIDER_MAX_ATTEMPTS=3
+BARI_CHAT_PROVIDER_TIMEOUT_SECONDS=20
+BARI_CHAT_PROVIDER_MAX_ATTEMPTS=3
 BARION_AI_MAX_REQUEST_BYTES=300000
 BARION_AI_MAX_INPUT_CHARACTERS=180000
 ```
@@ -85,7 +91,7 @@ BARION_AI_MAX_INPUT_CHARACTERS=180000
 
 ```bash
 EXPO_PUBLIC_BARION_AI_GATEWAY_URL=https://gateway.example.com
-EXPO_PUBLIC_BARION_AI_MODEL=gemini-2.5-flash
+EXPO_PUBLIC_BARION_AI_MODEL=gemini-3.8-flash
 EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS=120000
 EXPO_PUBLIC_SUPABASE_URL=https://yourproject.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJ...
@@ -129,9 +135,7 @@ npm run check         # TypeScript + Jest (89 tests)
 
 ## Cost Estimate
 
-**Gemini 2.5 Flash:** ~$0.00034 per source  
-**5K sources/month:** ~$1.70 + infrastructure (~$5-20)  
-**Total:** ~$7-22/month
+Verify current Gemini model pricing and measured token usage before setting production budget alerts. Do not rely on historical per-source estimates.
 
 ---
 

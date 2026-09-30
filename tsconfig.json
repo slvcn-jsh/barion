@@ -11,5 +11,10 @@
       ]
     }
   },
-  "exclude": ["node_modules", "output", "app/reference"]
+  "exclude": [
+    "node_modules",
+    "output",
+    "app/reference",
+    "assets/Barion_Bari_3D_Repository_Starter_Pack"
+  ]
 }

@@ -14,16 +14,22 @@ export function buildDeckPrintHtml(deck: DeckSummary, cards: StudyCard[], layout
 body { color: #0f2d60; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; margin: 0; }
 header { border-bottom: 3px solid #3b82f6; margin-bottom: 18px; padding-bottom: 12px; }
 h1 { font-size: 24px; margin: 0 0 5px; } .meta { color: #64748b; font-size: 11px; }
-.card { break-inside: avoid; border: 1px solid #d8e4f2; border-radius: 10px; margin: 0 0 10px; padding: 12px; }
+.card { break-inside: avoid; page-break-inside: avoid; border: 1px solid #d8e4f2; border-radius: 10px; margin: 0 0 10px; padding: 12px; }
 .number { color: #1d5fd1; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
-.question { font-size: 14px; font-weight: 700; line-height: 1.4; margin: 5px 0 8px; }
+.question { font-size: 15px; font-weight: 700; line-height: 1.4; margin: 5px 0 8px; }
 .answer { color: #35547d; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
-.source { background: #e8fbf8; border-radius: 7px; color: #0f766e; font-size: 9px; line-height: 1.4; margin-top: 9px; padding: 7px; }
+.source { background: #e8fbf8; border-radius: 7px; color: #0f766e; font-size: 9px; line-height: 1.4; margin-top: 9px; padding: 7px; border: 1px solid #bcece4; }
 .compact .card { align-items: start; display: grid; gap: 10px; grid-template-columns: 1fr 1.35fr; }
-.cutouts { display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
-.cutouts .card { min-height: 190px; border-style: dashed; }
+.cutouts { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.cutouts .card { min-height: 180px; border: 1.5px dashed #3b82f6; display: flex; flex-direction: column; justify-content: space-between; }
+.cutouts .question { font-size: 16px; margin-bottom: 12px; }
+.cutouts .answer { font-size: 13px; border-top: 1px solid #e2e8f0; padding-top: 8px; }
 .cram .answer { font-size: 11px; } .cram .card { padding: 9px; }
 footer { color: #94a3b8; font-size: 9px; margin-top: 18px; text-align: center; }
+@media print {
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .card { break-inside: avoid; page-break-inside: avoid; }
+}
 </style></head><body class="${layout}">
 <header><h1>${escapeHtml(deck.title)}</h1><div class="meta">BARION · ${safeCards.length} safe cards · ${escapeHtml(layoutLabel(layout))}</div></header>
 <main>${content || '<p>No safe cards are available to print.</p>'}</main>

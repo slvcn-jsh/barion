@@ -16,6 +16,30 @@ export const LOCAL_MODEL_ID = 'barion-extractive-rules';
 export const LOCAL_PROMPT_ID = 'extractive-rules';
 export const LOCAL_PROMPT_VERSION = 'extractive-v1';
 
+export async function generateLocalBaselineCards(
+  input: CardGenerationInput,
+  createLocalCandidates: () => GroundedCardGenerationResult['candidates'],
+): Promise<GroundedCardGenerationResult> {
+  validateInput(input);
+  const startedAt = Date.now();
+  const candidates = await resolveLocalCandidates(createLocalCandidates(), input);
+  return {
+    candidates,
+    provenance: {
+      requestId: input.requestId,
+      generationMode: 'LOCAL_BASELINE',
+      fallbackUsed: false,
+      providerId: LOCAL_PROVIDER_ID,
+      modelId: LOCAL_MODEL_ID,
+      promptId: LOCAL_PROMPT_ID,
+      promptVersion: LOCAL_PROMPT_VERSION,
+      generatedAt: new Date().toISOString(),
+      remoteCandidateCount: 0,
+      durationMs: Date.now() - startedAt,
+    },
+  };
+}
+
 export async function generateGroundedCardsWithFallback(
   provider: CardGenerationProvider | null,
   input: CardGenerationInput,
@@ -203,7 +227,7 @@ async function resolveLocalCandidates(
   input: CardGenerationInput,
 ) {
   const byId = new Map(input.segments.map((segment) => [segment.segmentId, segment]));
-  return Promise.all(candidates.map(async (candidate) => {
+  return Promise.all(candidates.slice(0, input.maxCandidates).map(async (candidate) => {
     const segment = byId.get(candidate.segmentId);
     if (!segment) return candidate;
     const evidenceSpan = await resolveSourceSpan(segment.text, candidate.evidenceText);

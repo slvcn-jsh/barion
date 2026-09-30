@@ -3,10 +3,11 @@ import argparse, subprocess
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from services.ai_gateway.policies import logical_model_id
 from .io_utils import canonical_json, read_json, sha256_text, write_json
 from .optimization import (
     OPTIMIZATION_VERSION, QUALITY_GATE_VERSION, Experiment, anonymize_candidates, baseline_id,
-    cost_metrics, decide_experiment, evidence_linked_recommendation, quality_metrics,
+    cost_metrics, decide_experiment, evaluation_run_record, evidence_linked_recommendation, quality_metrics,
     reproducible_split, validate_split,
 )
 from .phase3_run import _tree_hash
@@ -55,6 +56,25 @@ def run(generation: Path, baseline_evaluation: Path, candidate_evaluation: Path,
     quality = quality_metrics(cards, coverage, after, [x["verificationStatus"] for x in verification])
     usage = manifest["generation"].get("usage") or {}; accepted = sum(x == "PUBLISH" for x in after.values())
     costs = cost_metrics(usage, accepted, int(coverage.get("coveredConceptCount",0)), int(manifest["generation"].get("plannedRequestCount",0)))
+    evaluation_run = evaluation_run_record(
+        model=logical_model_id(
+            manifest["generation"]["provider"],
+            manifest["generation"]["model"],
+        ),
+        model_version=manifest["generation"]["model"],
+        prompt_version=manifest["generation"]["promptVersion"],
+        dataset_version=manifest["benchmarkVersion"],
+        schema_version="gateway-card-schema-1.2.0",
+        configuration={
+            "temperature": manifest["generation"]["temperature"],
+            "thinkingLevel": manifest["generation"]["thinkingLevel"],
+            "evaluationSuite": "bari-cardgen-eval-v1",
+        },
+        code_commit=manifest["gitCommit"],
+        quality=quality,
+        cost=costs,
+        reliability={"providerFailureRate": None, "schemaValidity": None},
+    )
     recommendation = evidence_linked_recommendation("CITATION", "50 canonical cards had legacy-unresolved coordinates.",
         "Retain deterministic UTF-16 span resolver and conformance fixtures.",
         {"legacyUnresolved":len(spans), "resolved":sum(x["status"] in {"exact","normalized","context-disambiguated"} for x in spans)})
@@ -65,6 +85,7 @@ def run(generation: Path, baseline_evaluation: Path, candidate_evaluation: Path,
     output.mkdir(parents=True, exist_ok=False)
     values=(("manifest.json",result_manifest),("baseline.json",baseline),("dataset_split.json",asdict(split)),
             ("experiment.json",asdict(experiment)),("quality_metrics.json",quality),("cost_metrics.json",costs),
+            ("evaluation_run.json",evaluation_run),
             ("blind_comparison.json",public),("recommendations.json",[recommendation]))
     for filename,value in values: write_json(output/filename,value)
     write_json(output/"private"/"blind_key.json",key)

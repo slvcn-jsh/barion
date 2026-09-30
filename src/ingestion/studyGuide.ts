@@ -1,4 +1,5 @@
 import type { ParsedSegment } from './types';
+import { extractConceptTargets } from './concepts';
 
 export type StudyGuideOutlineSection = {
   id: string;
@@ -124,27 +125,15 @@ function buildOutline(segments: ParsedSegment[], sourceTitle: string): StudyGuid
 }
 
 function buildQuickReference(segments: ParsedSegment[]): StudyGuideQuickReference[] {
-  const items: StudyGuideQuickReference[] = [];
-  const seen = new Set<string>();
-
-  for (const segment of segments) {
-    for (const sentence of splitSentences(segment.text)) {
-      const extracted = extractQuickReference(sentence);
-      if (!extracted) continue;
-      const key = normalizeKey(extracted.term);
-      if (seen.has(key) || key.length < 3) continue;
-      seen.add(key);
-      items.push({
-        id: `quick-${items.length + 1}`,
-        term: extracted.term,
-        detail: extracted.detail,
-        locator: segment.locator,
-      });
-      if (items.length >= MAX_QUICK_REFERENCE) return items;
-    }
-  }
-
-  return items;
+  return extractConceptTargets(segments)
+    .filter((target) => target.frontStyle === 'term')
+    .slice(0, MAX_QUICK_REFERENCE)
+    .map((target, index) => ({
+      id: `quick-${index + 1}`,
+      term: target.term,
+      detail: target.detail,
+      locator: target.locator,
+    }));
 }
 
 function buildDiscussionQuestions(
@@ -208,31 +197,6 @@ function buildOverview(
     : '';
 
   return `Start with ${anchorText}. These sections contain the highest-yield ideas Barion could extract from ${title}.${quickText}`;
-}
-
-function extractQuickReference(sentence: string) {
-  const definition = sentence.match(/^(.{3,90}?)\s+(?:is|are|refers to|means|is defined as|are defined as)\s+(.{12,240})$/i);
-  if (definition) {
-    const term = cleanTerm(definition[1]);
-    const detail = cleanSentence(definition[2]);
-    if (isUsefulTerm(term) && isUsefulDetail(detail)) return { term, detail };
-  }
-
-  const criteria = sentence.match(/^(?:diagnostic criteria for\s+)?(.{3,90}?)\s+(?:include|includes|require|requires)\s+(.{12,240})$/i);
-  if (criteria) {
-    const term = cleanTerm(criteria[1]);
-    const detail = cleanSentence(criteria[2]);
-    if (isUsefulTerm(term) && isUsefulDetail(detail)) return { term, detail: `Includes ${lowercaseFirst(detail)}` };
-  }
-
-  const colon = sentence.match(/^([^:]{3,80}):\s*(.{12,240})$/);
-  if (colon) {
-    const term = cleanTerm(colon[1]);
-    const detail = cleanSentence(colon[2]);
-    if (isUsefulTerm(term) && isUsefulDetail(detail)) return { term, detail };
-  }
-
-  return null;
 }
 
 function splitSentences(text: string) {
@@ -313,29 +277,6 @@ function cleanTitle(value: string) {
     .trim();
 }
 
-function cleanTerm(value: string) {
-  return cleanTitle(value)
-    .replace(/^(the|a|an)\s+/i, '')
-    .replace(/^(in|for|among|with)\s+[^,]{3,80},\s*/i, '')
-    .trim();
-}
-
-function isUsefulTerm(value: string) {
-  const normalized = normalizeKey(value);
-  const words = value.split(/\s+/).filter(Boolean);
-  return (
-    value.length >= 3 &&
-    value.length <= 90 &&
-    words.length <= 10 &&
-    !LOW_VALUE_HEADINGS.has(normalized) &&
-    !/^(it|they|this|these|those|there|he|she|we|you|example|condition|problem|topic)$/i.test(value)
-  );
-}
-
-function isUsefulDetail(value: string) {
-  return value.length >= 12 && value.length <= 260 && !isReferenceNoise(value);
-}
-
 function isReferenceNoise(value: string) {
   return /^(references|bibliography|copyright|doi:|http|www\.|figure\s+\d+|table\s+\d+)/i.test(value);
 }
@@ -356,10 +297,6 @@ function ensureSentence(value: string) {
   const cleaned = cleanSentence(value);
   if (!cleaned) return '';
   return /[.!?]$/.test(cleaned) ? cleaned : `${cleaned}.`;
-}
-
-function lowercaseFirst(value: string) {
-  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
 }
 
 function normalizeKey(value: string) {

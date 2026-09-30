@@ -59,6 +59,20 @@ describe('Barion backup format', () => {
     expect(() => parseBackupEnvelope(JSON.stringify(backup))).toThrow('cards data is damaged');
   });
 
+  it('preserves durable generation checkpoints as scalar generation-job data', () => {
+    const backup = validBackup();
+    const checkpoint = JSON.stringify({ checkpointVersion: 1, allCandidates: [] });
+    backup.payload.tables.generation_jobs.push({
+      id: 'job-1',
+      status: 'publishing',
+      candidate_checkpoint_json: checkpoint,
+    });
+
+    const parsed = parseBackupEnvelope(JSON.stringify(backup));
+
+    expect(parsed.payload.tables.generation_jobs[0].candidate_checkpoint_json).toBe(checkpoint);
+  });
+
   it('upgrades version-one backups with empty study-engine tables', () => {
     const backup = validBackup();
     backup.formatVersion = 1 as typeof BARION_BACKUP_VERSION;

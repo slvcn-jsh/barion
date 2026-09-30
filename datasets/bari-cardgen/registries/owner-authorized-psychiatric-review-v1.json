@@ -1,0 +1,28 @@
+{
+  "registryVersion": "1.0.0",
+  "sourceReference": "owner-authorized-psychiatric-review-v1",
+  "sourceArtifactSha256": "f9def89b970b28ee06005e2e9a33da65113c5b756b3b3ee3acae3bc7b23c5350",
+  "sourceType": "owner-authorized-benchmark-source",
+  "authorizationBasis": "owner-declared",
+  "dataUse": {
+    "evaluationUseAuthorized": true,
+    "trainingUseAuthorized": true,
+    "trainingConsent": "explicit",
+    "licenseUsageStatus": "approved",
+    "containsSensitiveData": false,
+    "sourceTrainingEligibility": "candidate",
+    "generatedFixtureTrainingEligibility": "inference-only",
+    "publicDistributionAuthorized": false
+  },
+  "evidence": {
+    "generationRunId": "2989a802173cfc05e313a135",
+    "generatedCandidateCount": 50,
+    "unlabeledFixtureRequired": true,
+    "independentCrossRoleReviewRequired": true
+  },
+  "invariants": {
+    "rawContentIncluded": false,
+    "modelOutputIsTrainingTruth": false,
+    "recordLevelReviewRequiredBeforeTraining": true
+  }
+}

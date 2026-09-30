@@ -20,6 +20,7 @@ jobs:
       - run: pip install -r services/card_benchmark/requirements.txt
       - run: npm ci
       - run: python -m pytest services/card_evaluation/tests services/card_benchmark/tests services/ai_gateway/tests -q
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --runInBand
       - run: python -m compileall -q services

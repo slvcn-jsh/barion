@@ -12,14 +12,21 @@ import { AppButton } from '@/components/AppButton';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FlipStudyCard } from '@/components/FlipStudyCard';
 import { EmptyState, LoadingState } from '@/components/ScreenState';
-import type { ActiveStudySession, ReviewRating, StudyActivityOutcome, StudyCard, StudyProfile } from '@/domain/types';
+import type {
+  ActiveStudySession,
+  ReviewRating,
+  StudyActivityOutcome,
+  StudyCard,
+  StudyProfile,
+  StudyQueueEmptyReason,
+} from '@/domain/types';
 import { previewFsrsOutcomes } from '@/scheduler/fsrs';
 import { initializeDatabase } from '@/storage/database';
 import {
   getLatestActiveStudySession,
   getModeStudyQueue,
   getStudyProfile,
-  getStudyQueue,
+  getStudyQueueResult,
   markCardNeedsSourceReview,
   recordCardReview,
   startStudySession,
@@ -35,6 +42,7 @@ import {
   spacedSortLabel,
   STUDY_MODES,
 } from '@/study/engine';
+import { studyQueueEmptyCopy } from '@/study/availability';
 import { recordStudyActivity } from '@/study/repository';
 import { colors, fonts, radii } from '@/theme/colors';
 
@@ -52,6 +60,7 @@ export default function StudyScreen() {
   const [reviewHoldCard, setReviewHoldCard] = useState<StudyCard | null>(null);
   const [holdingReview, setHoldingReview] = useState(false);
   const [recallDraft, setRecallDraft] = useState('');
+  const [emptyReason, setEmptyReason] = useState<StudyQueueEmptyReason>('no-cards');
 
   const engineMode = parseStudyEngineMode(params.engine);
   const learningGoal = parseStudyLearningGoal(params.goal);
@@ -125,14 +134,20 @@ export default function StudyScreen() {
     );
     let nextSession = canResume ? activeSession : null;
     if (!nextSession) {
-      const dueCards = modeUsesAllActiveCards(engineMode, learningGoal)
-        ? await getModeStudyQueue(params.deckId, params.moduleId, planSize === 'minimum' ? 5 : undefined)
-        : await getStudyQueue(
-            params.deckId,
-            params.focus === 'weak' ? 'weak' : undefined,
-            planSize === 'minimum' ? 5 : undefined,
-            params.moduleId,
-          );
+      let dueCards;
+      if (modeUsesAllActiveCards(engineMode, learningGoal)) {
+        dueCards = await getModeStudyQueue(params.deckId, params.moduleId, planSize === 'minimum' ? 5 : undefined);
+        setEmptyReason('no-cards');
+      } else {
+        const queueResult = await getStudyQueueResult(
+          params.deckId,
+          params.focus === 'weak' ? 'weak' : undefined,
+          planSize === 'minimum' ? 5 : undefined,
+          params.moduleId,
+        );
+        dueCards = queueResult.cards;
+        setEmptyReason(queueResult.emptyReason);
+      }
       nextSession = dueCards.length
         ? await startStudySession({
             cards: dueCards,
@@ -322,12 +337,38 @@ export default function StudyScreen() {
         </ScrollView>
       );
     }
+    const emptyCopy = modeUsesAllActiveCards(engineMode, learningGoal)
+      ? studyQueueEmptyCopy('no-cards')
+      : studyQueueEmptyCopy(emptyReason);
+    if (emptyReason === 'daily-new-limit' && params.deckId) {
+      return (
+        <EmptyState title={emptyCopy.title} body={emptyCopy.body}>
+          <View style={{ gap: 9, marginTop: 16, width: '100%', maxWidth: 300 }}>
+            <AppButton
+              icon="albums-outline"
+              label="Browse all cards"
+              onPress={() => router.replace({ pathname: '/study', params: { ...params, engine: 'browse' } })}
+            />
+            <AppButton
+              icon="school-outline"
+              label="Learn without daily limit"
+              variant="secondary"
+              onPress={() => router.replace({ pathname: '/study', params: { ...params, engine: 'loop-sort' } })}
+            />
+            <AppButton
+              icon="options-outline"
+              label="Adjust daily limit"
+              variant="quiet"
+              onPress={() => router.push('/profile')}
+            />
+          </View>
+        </EmptyState>
+      );
+    }
     return (
       <EmptyState
-        title={modeUsesAllActiveCards(engineMode, learningGoal) ? 'No cards available' : 'No cards due'}
-        body={modeUsesAllActiveCards(engineMode, learningGoal)
-          ? 'This set has no safe, active cards to study yet.'
-          : 'There are no cards available for this session. You may be caught up, have reached a daily guardrail, or have no weak concepts yet.'}
+        title={emptyCopy.title}
+        body={emptyCopy.body}
       />
     );
   }

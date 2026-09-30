@@ -13,6 +13,7 @@ from services.ai_gateway.errors import GatewayError
 from services.ai_gateway.models import CardGenerationRequest, CardGenerationResponse
 from services.ai_gateway.orchestration import GenerationOrchestrator
 from services.ai_gateway.prompts import CARD_GENERATION_SYSTEM_PROMPT
+from services.ai_gateway.policies import DEFAULT_GENERATION_MODEL
 from services.ai_gateway.providers.gemini import (
     CARD_GENERATION_MAX_OUTPUT_TOKENS,
     CARD_GENERATION_THINKING_LEVEL,
@@ -58,7 +59,7 @@ def load_provider_settings(env_path: Path = _GATEWAY_ENV_PATH) -> ProviderSettin
     if provider != "gemini":
         raise ValueError(f"Unsupported generation provider: {provider}.")
 
-    model = os.getenv("PRIMARY_GENERATION_MODEL", "gemini-2.5-flash").strip()
+    model = os.getenv("PRIMARY_GENERATION_MODEL", DEFAULT_GENERATION_MODEL).strip()
     if not model:
         raise ValueError("PRIMARY_GENERATION_MODEL is required.")
 
@@ -498,7 +499,7 @@ def _merged_response(
 
 def configured_model() -> str:
     load_dotenv(dotenv_path=_GATEWAY_ENV_PATH, override=False)
-    return os.getenv("PRIMARY_GENERATION_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    return os.getenv("PRIMARY_GENERATION_MODEL", DEFAULT_GENERATION_MODEL).strip() or DEFAULT_GENERATION_MODEL
 
 
 def _to_card(raw: dict[str, Any], index: int) -> Card:

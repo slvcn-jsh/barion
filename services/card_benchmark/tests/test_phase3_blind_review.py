@@ -28,22 +28,29 @@ def test_scoring_enforces_gates_and_computes_reviewer_agreement(tmp_path):
     write_json(private / "blind_review_key.json", key)
     write_json(run / "metrics.json", {"phase1Evaluation": {"contradictions": 0, "criticalFailures": 0}})
     write_json(run / "manifest.json", {"generation": {"quantityContractMet": True},
-                                       "versions": {"blindReview": "1.0.0", "rubric": "1.0.0"}})
-    write_json(run / "blind_review_protocol.json", {"blindReviewVersion": "1.0.0", "rubricVersion": "1.0.0"})
+                                       "versions": {"blindReview": "2.0.0", "rubric": "2.0.0"}})
+    write_json(run / "blind_review_protocol.json", {"blindReviewVersion": "2.0.0", "rubricVersion": "2.0.0"})
     paths = []
-    for reviewer in ("r1", "r2"):
+    for reviewer, role in (("r1", "medical_student"), ("r2", "clinician")):
         path = tmp_path / f"{reviewer}.csv"; paths.append(path)
         with path.open("w", encoding="utf-8", newline="") as handle:
-            fields = ["pairId", "reviewerId", "accuracyA", "accuracyB", "clarityA", "clarityB",
-                      "learningValueA", "learningValueB", "preference", "exclusionReason", "notes"]
+            score_fields = ["accuracy", "sourceFaithfulness", "atomicity", "clarity",
+                            "answerSpecificity", "learningValue"]
+            fields = ["pairId", "reviewerId", "reviewerRole",
+                      *(f"{field}{side}" for field in score_fields for side in ("A", "B")),
+                      "preference", "exclusionReason", "notes"]
             writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
             for item in key:
-                writer.writerow({"pairId": item["pairId"], "reviewerId": reviewer,
-                                 "accuracyA": 5, "accuracyB": 4, "clarityA": 5, "clarityB": 4,
-                                 "learningValueA": 5, "learningValueB": 4, "preference": "A",
-                                 "exclusionReason": "", "notes": ""})
+                writer.writerow({
+                    "pairId": item["pairId"], "reviewerId": reviewer, "reviewerRole": role,
+                    **{f"{field}A": 5 for field in score_fields},
+                    **{f"{field}B": 4 for field in score_fields},
+                    "preference": "A", "exclusionReason": "", "notes": "",
+                })
     result = score_review_files(run, paths)
     assert result["status"] == "PASS"
     assert result["productionSuperior"] is True
     assert result["preferenceAgreement"] == result["preferenceKappa"] == 1.0
+    assert result["humanAcceptanceRate"] == 1.0
+    assert result["reviewerRoles"] == {"r1": "medical_student", "r2": "clinician"}
     assert all(result["gates"].values())

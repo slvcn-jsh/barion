@@ -1,0 +1,38 @@
+{
+  "name": "Bari 3D Prototype",
+  "version": "0.1.0",
+  "status": "prototype-static",
+  "author": "OpenAI",
+  "brand": "Barion",
+  "files": {
+    "primary_glb": "assets/3d/bari/bari_prototype_static.glb",
+    "obj": "assets/3d/bari/bari_prototype_static.obj",
+    "ply": "assets/3d/bari/bari_prototype_static.ply"
+  },
+  "visual_identity": {
+    "primary_navy": "#0B2D6B",
+    "medical_blue": "#0A84FF",
+    "light_blue": "#E8F3FF",
+    "deep_accent": "#0A1A3C"
+  },
+  "current_capabilities": [
+    "Static 3D model",
+    "GLB/OBJ/PLY exports",
+    "Recognizable Bari silhouette",
+    "Repository-ready packaging"
+  ],
+  "not_yet_included": [
+    "Armature / rig",
+    "Blendshapes / facial rig",
+    "Animation clips",
+    "Optimized production topology",
+    "PBR texture set"
+  ],
+  "recommended_next_steps": [
+    "Import GLB into Blender",
+    "Perform cleanup / retopology if needed",
+    "Add armature and skin weights",
+    "Add blink/talk/thinking/wave/celebrate animations",
+    "Export final rigged GLB for app use"
+  ]
+}

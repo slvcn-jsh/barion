@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barion.local/schemas/bari-cardgen-record-v1.json",
+  "title": "Bari card-generation dataset record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "exampleId", "datasetVersion", "task", "sourceType", "sourceReference", "input",
+    "expectedOutput", "qualityStatus", "reviewStatus", "provenance", "licenseUsageStatus",
+    "createdAt", "promptVersion", "modelOrigin", "humanEdited", "rejectionReason",
+    "trainingEligibility", "trainingConsent", "sourceUseAuthorized", "containsSensitiveData", "split"
+  ],
+  "properties": {
+    "exampleId": { "type": "string", "minLength": 1 },
+    "datasetVersion": { "type": "string", "minLength": 1 },
+    "task": { "const": "CARD_GENERATION" },
+    "sourceType": { "type": "string", "minLength": 1 },
+    "sourceReference": { "type": "string", "minLength": 1 },
+    "input": { "type": "object" },
+    "expectedOutput": { "type": "object" },
+    "qualityStatus": { "enum": ["gold", "accepted", "rejected", "unreviewed"] },
+    "reviewStatus": { "enum": ["human-approved", "expert-approved", "unreviewed", "rejected"] },
+    "provenance": {
+      "enum": [
+        "human-authored", "human-corrected-ai", "expert-reviewed-ai",
+        "independently-validated-synthetic", "model-generated-unreviewed"
+      ]
+    },
+    "licenseUsageStatus": { "enum": ["approved", "restricted", "unknown"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "promptVersion": { "type": "string", "minLength": 1 },
+    "modelOrigin": { "type": ["string", "null"] },
+    "humanEdited": { "type": "boolean" },
+    "rejectionReason": { "type": ["string", "null"] },
+    "trainingEligibility": { "enum": ["eligible", "inference-only", "rejected"] },
+    "trainingConsent": { "enum": ["explicit", "not-required", "unknown", "denied"] },
+    "sourceUseAuthorized": { "type": "boolean" },
+    "containsSensitiveData": { "type": "boolean" },
+    "split": { "enum": ["train", "validation", "test", "adversarial", "rejected"] }
+  }
+}

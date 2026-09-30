@@ -113,8 +113,11 @@ def write_artifacts(output: Path, manifest: dict[str, Any], concepts: list[Any],
     write_json(output / "semantic_calibration.json", calibration_rows)
     write_json(output / "blind_review_protocol.json", protocol)
     review_fields = ["pairId", "sourceLocator", "sourceProposition", "cardAQuestion", "cardAAnswer",
-                     "cardBQuestion", "cardBAnswer", "reviewerId", "accuracyA", "accuracyB", "clarityA",
-                     "clarityB", "learningValueA", "learningValueB", "preference", "exclusionReason", "notes"]
+                     "cardBQuestion", "cardBAnswer", "reviewerId", "reviewerRole",
+                     "accuracyA", "accuracyB", "sourceFaithfulnessA", "sourceFaithfulnessB",
+                     "atomicityA", "atomicityB", "clarityA", "clarityB",
+                     "answerSpecificityA", "answerSpecificityB", "learningValueA", "learningValueB",
+                     "preference", "exclusionReason", "notes"]
     write_csv(output / "blind_review.csv", review_rows, review_fields)
     write_json(output / "private" / "blind_review_key.json", review_key)
     write_json(output / "regression_results.json", regression_rows)

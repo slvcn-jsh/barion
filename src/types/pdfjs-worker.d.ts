@@ -8,7 +8,14 @@ declare module 'pdfjs-dist/build/pdf.mjs' {
       numPages: number;
       getPage(pageNumber: number): Promise<{
         getTextContent(): Promise<{
-          items: Array<{ str?: string; hasEOL?: boolean }>;
+          items: Array<{
+            str?: string;
+            hasEOL?: boolean;
+            width?: number;
+            height?: number;
+            fontName?: string;
+            transform?: number[];
+          }>;
         }>;
       }>;
     }>;

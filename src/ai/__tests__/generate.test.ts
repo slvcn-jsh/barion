@@ -1,4 +1,8 @@
-import { generateGroundedCards, generateGroundedCardsWithFallback } from '@/ai/generate';
+import {
+  generateGroundedCards,
+  generateGroundedCardsWithFallback,
+  generateLocalBaselineCards,
+} from '@/ai/generate';
 import type { AITelemetryEvent, CardGenerationProvider } from '@/ai/types';
 
 const provider: CardGenerationProvider = {
@@ -25,6 +29,45 @@ const provider: CardGenerationProvider = {
 };
 
 describe('generateGroundedCards', () => {
+  it('creates source-matched local baseline cards without reporting provider fallback', async () => {
+    const result = await generateLocalBaselineCards({
+      requestId: 'request-baseline',
+      sourceId: 'source-1',
+      sourceTitle: 'Notes',
+      maxCandidates: 1,
+      segments: [{
+        segmentId: 'segment-1',
+        locator: 'Page 1',
+        sectionPath: 'Definition',
+        text: 'PCOS is an endocrine disorder.',
+      }],
+    }, () => [{
+      segmentId: 'segment-1',
+      locator: 'Page 1',
+      cardType: 'definition',
+      learningObjective: 'Recall the source definition.',
+      question: 'What is PCOS?',
+      answer: 'Answer: PCOS is an endocrine disorder.',
+      evidenceText: 'PCOS is an endocrine disorder.',
+    }]);
+
+    expect(result.provenance).toEqual(expect.objectContaining({
+      generationMode: 'LOCAL_BASELINE',
+      fallbackUsed: false,
+      providerId: 'local-extractive',
+      modelId: 'barion-extractive-rules',
+      remoteCandidateCount: 0,
+    }));
+    expect(result.provenance.fallbackReason).toBeUndefined();
+    expect(result.candidates[0]).toEqual(expect.objectContaining({
+      evidenceSpan: expect.objectContaining({ status: 'exact' }),
+      evaluation: expect.objectContaining({
+        publicationDisposition: 'PUBLISH',
+        sourceClaimSupported: 'supported',
+      }),
+    }));
+  });
+
   it('uses provider-independent contract and emits content-free telemetry', async () => {
     const events: AITelemetryEvent[] = [];
     const result = await generateGroundedCards(provider, {
@@ -46,7 +89,7 @@ describe('generateGroundedCards', () => {
       providerId: 'upstream-provider',
       modelId: 'upstream-model',
       promptId: 'grounded-card-generation',
-      promptVersion: '1.2.0',
+      promptVersion: '1.4.0',
       providerRequestId: 'provider-request-1',
       remoteCandidateCount: 1,
     }));

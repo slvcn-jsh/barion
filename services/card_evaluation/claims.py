@@ -5,7 +5,7 @@ import re
 from .models import Claim, NormalizedCard, NumericValue, RiskLevel, SourceLocation
 from .text import sha256_text
 
-CLAIM_EXTRACTOR_VERSION = "1.2.0"
+CLAIM_EXTRACTOR_VERSION = "1.3.0"
 _NUMBER = re.compile(
     r"(?P<qualifier><=|>=|<|>|~|about\s+|approximately\s+|less\s+than\s+|more\s+than\s+)?"
     r"(?P<start>\d+(?:\.\d+)?)\s*(?:(?:-|–|to)\s*(?P<end>\d+(?:\.\d+)?))?\s*"
@@ -124,7 +124,9 @@ def _split_with_offsets(text: str) -> list[tuple[int, int, str, bool]]:
 
 def _is_factual(location: SourceLocation, text: str) -> bool:
     if location == "question":
-        return bool(_VERB.search(text) and not re.match(r"^(what|which|who|when|where|why|how)\b", text.lower()))
+        # Interrogatives request a fact; they do not assert one. Treating
+        # yes/no wording as a claim made valid learner questions fail grounding.
+        return False
     if location == "learning_objective" and re.match(r"^(identify|explain|understand|recognize|recall|compare|contrast|define|differentiate)\b", text, re.I):
         return False
     if location == "core_answer" and _meaningful_single_entity(text):

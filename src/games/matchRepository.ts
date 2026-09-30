@@ -1,8 +1,6 @@
-import type * as SQLite from 'expo-sqlite';
-import { Platform } from 'react-native';
-
 import { createId, nowIso } from '@/domain/ids';
 import { getDatabase } from '@/storage/database';
+import { runWriteTransaction } from '@/storage/repositories/shared';
 import { getModeStudyQueue } from '@/storage/repository';
 
 export type MatchCard = { id: string; prompt: string; answer: string; deckTitle: string };
@@ -212,15 +210,4 @@ function parseIds(value: string) {
 
 function normalize(value: string) {
   return value.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-async function runWriteTransaction(
-  db: SQLite.SQLiteDatabase,
-  task: (txn: SQLite.SQLiteDatabase) => Promise<void>,
-) {
-  if (Platform.OS === 'web') {
-    await db.withTransactionAsync(async () => task(db));
-    return;
-  }
-  await db.withExclusiveTransactionAsync(task);
 }

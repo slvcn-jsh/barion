@@ -7,6 +7,13 @@ from services.card_evaluation.verification import VerificationCoordinator
 
 from .errors import GatewayError
 from .models import BariChatRequest, BariChatResponse, BariGeneration, CardGenerationRequest, CardGenerationResponse
+from .policies import (
+    BARI_CHAT_POLICY,
+    CARD_GENERATION_POLICY,
+    EffectiveTaskPolicy,
+    logical_model_id,
+    resolve_task_policy,
+)
 from .providers.base import GenerationProvider, ProviderResult
 from .retrieval import HybridRetriever, NoOpRetriever, SourceRetriever
 from .telemetry import TelemetryEvent, record
@@ -19,11 +26,17 @@ class GenerationOrchestrator:
     def __init__(
         self,
         provider: GenerationProvider,
+        chat_provider: GenerationProvider | None = None,
         retriever: SourceRetriever | None = None,
         verifier: VerificationCoordinator | None = None,
         request_budget_seconds: float = DEFAULT_REQUEST_BUDGET_SECONDS,
+        card_policy: EffectiveTaskPolicy | None = None,
+        chat_policy: EffectiveTaskPolicy | None = None,
     ) -> None:
         self.provider = provider
+        self.chat_provider = chat_provider or provider
+        self.card_policy = card_policy or _provider_policy(CARD_GENERATION_POLICY, provider)
+        self.chat_policy = chat_policy or _provider_policy(BARI_CHAT_POLICY, self.chat_provider)
         self.retriever = retriever or NoOpRetriever()
         self.verifier = verifier or VerificationCoordinator()
         self.request_budget_seconds = request_budget_seconds
@@ -33,6 +46,8 @@ class GenerationOrchestrator:
         started = monotonic()
         try:
             result = await self.provider.generate_cards(request)
+            provider_id = result.provider_id or self.provider.id
+            model_id = result.model_id or self.provider.model
             try:
                 output = await asyncio.to_thread(
                     validate_grounded_output,
@@ -42,36 +57,29 @@ class GenerationOrchestrator:
                     verification_deadline=started + self.request_budget_seconds,
                 )
             except GatewayError as error:
-                _attach_result_diagnostics(error, result, self.provider.model)
+                _attach_result_diagnostics(error, result, model_id)
                 raise
-            if len(output.candidates) < request.minCandidates:
-                raise GatewayError(
-                    "insufficient_candidates",
-                    "Generation provider returned fewer supported cards than required.",
-                    502,
-                    True,
-                    self.provider.id,
-                    {
-                        **_result_diagnostics(result, self.provider.model),
-                        "validatedCandidateCount": len(output.candidates),
-                        "minCandidates": request.minCandidates,
-                    },
-                )
             record(TelemetryEvent(
                 requestId=request.requestId,
                 operation="card-generation",
-                provider=self.provider.id,
-                model=self.provider.model,
+                provider=provider_id,
+                model=model_id,
                 latencyMs=round((monotonic() - started) * 1_000),
                 success=True,
                 inputTokens=result.usage.inputTokens if result.usage else None,
                 outputTokens=result.usage.outputTokens if result.usage else None,
                 candidateCount=len(output.candidates),
+                policyId=self.card_policy.policy_id,
+                logicalModelId=logical_model_id(provider_id, model_id),
+                promptVersion=request.promptVersion,
+                schemaVersion=self.card_policy.schema_version,
+                policyConfiguration=_policy_configuration(self.card_policy),
+                diagnostics=result.diagnostics,
             ))
             return CardGenerationResponse(
                 requestId=result.request_id,
-                provider=self.provider.id,
-                model=self.provider.model,
+                provider=provider_id,
+                model=model_id,
                 output=output,
                 usage=result.usage,
             )
@@ -81,9 +89,14 @@ class GenerationOrchestrator:
                 requestId=request.requestId,
                 operation="card-generation",
                 provider=self.provider.id,
-                model=self.provider.model,
+                model=_error_model(error, self.provider.model),
                 latencyMs=round((monotonic() - started) * 1_000),
                 success=False,
+                policyId=self.card_policy.policy_id,
+                logicalModelId=logical_model_id(self.provider.id, _error_model(error, self.provider.model)),
+                promptVersion=request.promptVersion,
+                schemaVersion=self.card_policy.schema_version,
+                policyConfiguration=_policy_configuration(self.card_policy),
                 errorCategory=getattr(error, "code", "internal_error"),
                 diagnostics=diagnostics,
             ))
@@ -94,7 +107,12 @@ class GenerationOrchestrator:
         # Get or initialize conversation history
         conversation_id = request.conversationId or ""
         conversation_key = (identity_subject, conversation_id)
-        history = self._conversations.get(conversation_key, [])
+
+        # Prefer client-supplied history (canonical from local SQLite)
+        if request.history:
+            history = [{"role": "user" if m.role == "user" else "model", "content": m.text} for m in request.history]
+        else:
+            history = list(self._conversations.get(conversation_key, []))
 
         # Limit history to last 10 exchanges (20 messages) to manage context window
         if len(history) > 20:
@@ -105,7 +123,8 @@ class GenerationOrchestrator:
         if not evidence:
             evidence = await self.retriever.retrieve_evidence(request, max_segments=5)
         elif len(evidence) > 5:
-            hybrid = HybridRetriever()
+            embedding_provider = getattr(self.retriever, "embedding_provider", None)
+            hybrid = HybridRetriever(embedding_provider=embedding_provider)
             await hybrid.index_segments(evidence)
             top_evidence = await hybrid.retrieve_evidence(request, max_segments=5)
             if top_evidence:
@@ -121,16 +140,22 @@ class GenerationOrchestrator:
             deckId=request.deckId,
             documentIds=request.documentIds,
             evidence=evidence,
+            history=request.history,
         )
 
         try:
-            result = await self.provider.bari_chat(enriched_request, history)
+            result = await self.chat_provider.bari_chat(enriched_request, history)
+            provider_id = result.provider_id or self.chat_provider.id
+            model_id = result.model_id or self.chat_provider.model
 
             # Update conversation history
             if conversation_id:
-                history.append({"role": "user", "content": request.message})
-                history.append({"role": "model", "content": result.message})
-                self._conversations[conversation_key] = history
+                cached_history = list(history)
+                cached_history.append({"role": "user", "content": request.message})
+                cached_history.append({"role": "model", "content": result.message})
+                if len(cached_history) > 20:
+                    cached_history = cached_history[-20:]
+                self._conversations[conversation_key] = cached_history
 
             # Extract citations from response if evidence was provided
             citations = []
@@ -153,12 +178,18 @@ class GenerationOrchestrator:
             record(TelemetryEvent(
                 requestId=result.request_id,
                 operation="bari-chat",
-                provider=self.provider.id,
-                model=self.provider.model,
+                provider=provider_id,
+                model=model_id,
                 latencyMs=round((monotonic() - started) * 1_000),
                 success=True,
                 inputTokens=result.usage.inputTokens if result.usage else None,
                 outputTokens=result.usage.outputTokens if result.usage else None,
+                policyId=self.chat_policy.policy_id,
+                logicalModelId=logical_model_id(provider_id, model_id),
+                promptVersion=self.chat_policy.prompt_version,
+                schemaVersion=self.chat_policy.schema_version,
+                policyConfiguration=_policy_configuration(self.chat_policy),
+                diagnostics=result.diagnostics,
             ))
 
             return BariChatResponse(
@@ -166,20 +197,30 @@ class GenerationOrchestrator:
                 citations=citations,
                 evidence=evidence,
                 generation=BariGeneration(
-                    provider=self.provider.id,
-                    model=self.provider.model,
+                    provider=provider_id,
+                    model=model_id,
                     requestId=result.request_id,
                 ),
             )
         except Exception as error:
+            diagnostics = error.diagnostics if isinstance(error, GatewayError) and error.diagnostics else None
             record(TelemetryEvent(
                 requestId=conversation_id or "unknown",
                 operation="bari-chat",
-                provider=self.provider.id,
-                model=self.provider.model,
+                provider=self.chat_provider.id,
+                model=_error_model(error, self.chat_provider.model),
                 latencyMs=round((monotonic() - started) * 1_000),
                 success=False,
+                policyId=self.chat_policy.policy_id,
+                logicalModelId=logical_model_id(
+                    self.chat_provider.id,
+                    _error_model(error, self.chat_provider.model),
+                ),
+                promptVersion=self.chat_policy.prompt_version,
+                schemaVersion=self.chat_policy.schema_version,
+                policyConfiguration=_policy_configuration(self.chat_policy),
                 errorCategory=getattr(error, "code", "internal_error"),
+                diagnostics=diagnostics,
             ))
             raise
 
@@ -196,3 +237,32 @@ def _result_diagnostics(result: ProviderResult, model: str) -> dict[str, object]
 
 def _attach_result_diagnostics(error: GatewayError, result: ProviderResult, model: str) -> None:
     error.diagnostics = {**_result_diagnostics(result, model), **error.diagnostics}
+
+
+def _error_model(error: Exception, default: str) -> str:
+    if isinstance(error, GatewayError) and isinstance(error.diagnostics, dict):
+        failed_model = error.diagnostics.get("failedModel")
+        if isinstance(failed_model, str) and failed_model:
+            return failed_model
+    return default
+
+
+def _provider_policy(policy, provider: GenerationProvider) -> EffectiveTaskPolicy:
+    return resolve_task_policy(
+        policy,
+        provider=provider.id,
+        model_id=provider.model,
+        fallback_model_id=None,
+    )
+
+
+def _policy_configuration(policy: EffectiveTaskPolicy) -> dict[str, object]:
+    return {
+        "temperature": policy.temperature,
+        "thinking": policy.thinking,
+        "timeoutSeconds": policy.timeout_seconds,
+        "maxAttempts": policy.max_attempts,
+        "retryBaseDelaySeconds": policy.retry_base_delay_seconds,
+        "retryMaxDelaySeconds": policy.retry_max_delay_seconds,
+        "fallbackLogicalModelId": policy.fallback_logical_model_id,
+    }

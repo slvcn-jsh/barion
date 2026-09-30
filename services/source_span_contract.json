@@ -9,6 +9,8 @@
     {"id":"ambiguous","source":"dose and dose","evidence":"dose","expected":{"status":"ambiguous","startOffset":null,"endOffset":null}},
     {"id":"not-found","source":"source","evidence":"missing","expected":{"status":"not-found","startOffset":null,"endOffset":null}},
     {"id":"invalid","source":"source","evidence":"","expected":{"status":"invalid","startOffset":null,"endOffset":null}},
-    {"id":"stale","source":"source","evidence":"source","expectedSourceTextSha256":"0000000000000000000000000000000000000000000000000000000000000000","expected":{"status":"stale-source","startOffset":null,"endOffset":null}}
+    {"id":"stale","source":"source","evidence":"source","expectedSourceTextSha256":"0000000000000000000000000000000000000000000000000000000000000000","expected":{"status":"stale-source","startOffset":null,"endOffset":null}},
+    {"id":"interleaved-pdf-columns","source":"The contraceptive patch is Continuous protection Potential side-effects similar to pills a small thin smooth patch that you attach directly to your skin.","evidence":"The contraceptive patch is a small thin smooth patch that you attach directly to your skin.","expected":{"status":"normalized","startOffset":0,"endOffset":152}},
+    {"id":"interleaved-negation-is-not-safe","source":"Patch prevents pregnancy not when used correctly and consistently.","evidence":"Patch prevents pregnancy when used correctly and consistently.","expected":{"status":"not-found","startOffset":null,"endOffset":null}}
   ]
 }

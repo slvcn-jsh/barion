@@ -40,6 +40,7 @@ export type ProductionEvaluation = {
   pedagogyStatus: 'not_evaluated' | 'acceptable' | 'review';
   publicationDisposition: PublicationDisposition;
   reasonCodes: string[];
+  validationCodes?: string[];
   claimResults?: ClaimEvaluation[];
   originalCandidate?: {
     segmentId: string;

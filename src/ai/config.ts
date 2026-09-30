@@ -10,13 +10,33 @@ export type PublicGatewayConfig = {
 const SENSITIVE_KEY = /api.?key|secret|token|authorization|credential/i;
 
 export function readExpoPublicGatewayConfig(): PublicGatewayConfig | null {
-  const env = process.env as Record<string, string | undefined>;
-  const gatewayUrl = env['EXPO_PUBLIC_BARION_AI_GATEWAY_URL'];
-  const model = env['EXPO_PUBLIC_BARION_AI_MODEL'];
-  const accessToken = env['EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN'];
-  const timeoutMs = readOptionalInteger(env['EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS']);
-  if (!gatewayUrl) return null;
-  return parsePublicGatewayConfig({ gatewayUrl, model, accessToken, timeoutMs });
+  // Expo only inlines EXPO_PUBLIC_* values when they are referenced directly.
+  // Keep static local auth development-only so production bundles use session tokens.
+  return parseExpoPublicGatewayEnvironment({
+    gatewayUrl: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL,
+    model: process.env.EXPO_PUBLIC_BARION_AI_MODEL,
+    accessToken: process.env.NODE_ENV === 'development'
+      ? process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN
+      : undefined,
+    timeoutMs: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS,
+    nodeEnv: process.env.NODE_ENV,
+  });
+}
+
+export function parseExpoPublicGatewayEnvironment(env: {
+  gatewayUrl?: string;
+  model?: string;
+  accessToken?: string;
+  timeoutMs?: string;
+  nodeEnv?: string;
+}): PublicGatewayConfig | null {
+  if (!env.gatewayUrl) return null;
+  return parsePublicGatewayConfig({
+    gatewayUrl: env.gatewayUrl,
+    model: env.model,
+    accessToken: env.nodeEnv === 'development' ? env.accessToken : undefined,
+    timeoutMs: readOptionalInteger(env.timeoutMs),
+  });
 }
 
 export function resolvePublicGatewayConfig(): PublicGatewayConfig | null {

@@ -16,10 +16,17 @@ def source(text: str) -> Segment:
     return Segment("s1", "Page 1", "Topic", text, 0, len(text))
 
 
-def candidate(answer: str, evidence: str, source_text: str, *, question: str = "What does metformin do?") -> Card:
+def candidate(
+    answer: str,
+    evidence: str,
+    source_text: str,
+    *,
+    question: str = "What does metformin do?",
+    card_type: str = "mechanism",
+) -> Card:
     span = resolve_source_span(source_text, evidence).to_dict()
     return Card(
-        "c1", question, answer, "production", "s1", "Page 1", "mechanism",
+        "c1", question, answer, "production", "s1", "Page 1", card_type,
         "Recall the source-supported answer.", evidence, span,
     )
 
@@ -81,6 +88,56 @@ def test_high_risk_required_verification_unavailable_is_review():
     assert result["medicalRisk"] == "high"
     assert result["medicalVerificationStatus"] == "authority_unavailable"
     assert result["publicationDisposition"] == "REVIEW"
+
+
+def test_distinct_temporal_doses_are_not_an_internal_contradiction():
+    text = "Initial lithium dose is 300 mg daily. Later lithium dose is 600 mg daily."
+    card = candidate(
+        "Answer: Initial lithium dose is 300 mg daily.\nStudy note: Later lithium dose is 600 mg daily.",
+        text,
+        text,
+        question="How does the lithium dose change?",
+        card_type="dose",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert "INTERNAL_NUMERIC_CONTRADICTION" not in result["reasonCodes"]
+    assert result["sourceClaimSupported"] == "supported"
+    assert result["publicationDisposition"] == "REVIEW"
+
+
+def test_same_numeric_role_with_different_values_remains_a_contradiction():
+    text = "The initial lithium dose is 300 mg daily."
+    card = candidate(
+        "Answer: The initial lithium dose is 300 mg daily.\nStudy note: The initial lithium dose is 600 mg daily.",
+        text,
+        text,
+        question="What is the initial lithium dose?",
+        card_type="dose",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert "INTERNAL_NUMERIC_CONTRADICTION" in result["reasonCodes"]
+    assert result["publicationDisposition"] == "REJECT"
+
+
+def test_approximate_and_exact_same_value_are_not_an_internal_contradiction():
+    text = "About 80% of patients improve."
+    card = candidate(
+        "Answer: About 80% of patients improve.\nStudy note: 80% of patients improve.",
+        text,
+        text,
+        question="What proportion of patients improve?",
+        card_type="clinical-finding",
+    )
+
+    evaluation = evaluate_once(card, [source(text)])
+
+    assert "INTERNAL_NUMERIC_CONTRADICTION" not in {
+        item.code for item in evaluation["validations"]
+    }
 
 
 def test_authority_conflict_is_review_not_source_rewrite():
@@ -157,6 +214,137 @@ def test_later_source_contradiction_overrides_earlier_support():
     assert core.contradictionEvidence
 
 
+def test_unrelated_document_numbers_do_not_contradict_cited_subject():
+    supporting = "Abstinence is 100% effective in preventing pregnancy."
+    unrelated = "When used correctly and consistently, birth control pills are 99.5% effective."
+    card = candidate(
+        f"Answer: {supporting}",
+        supporting,
+        supporting,
+        question="How effective is abstinence in preventing pregnancy?",
+        card_type="definition",
+    )
+    result = evaluate_once(card, [source(supporting), Segment("s2", "Page 2", "Pills", unrelated, 0, len(unrelated))])
+    core = next(item for item in result["grounding"] if item.claimId in {
+        claim.claimId for claim in result["claims"] if claim.location == "core_answer"
+    })
+    assert core.sourceSupport == "supported_by_citation"
+    assert not core.contradictionEvidence
+
+
+def test_unrelated_numbers_in_same_segment_do_not_contradict_supported_citation():
+    supporting = "Abstinence is 100% effective in preventing pregnancy."
+    same_segment = supporting + "\nWhen used correctly and consistently, 99.5% effective."
+    card = candidate(
+        "Answer: 100% effective.",
+        same_segment,
+        supporting,
+        question="What is the effectiveness of abstinence in preventing pregnancy?",
+        card_type="definition",
+    )
+    result = evaluate_once(card, [Segment("s1", "Page 1", "Methods", same_segment, 0, len(same_segment))])
+    core = next(item for item in result["grounding"] if item.claimId in {
+        claim.claimId for claim in result["claims"] if claim.location == "core_answer"
+    })
+    assert core.sourceSupport == "supported_by_citation"
+    assert not core.contradictionEvidence
+
+
+def test_contraindication_list_agrees_with_prohibition_wording():
+    text = "Depo-Provera should not be used if blood clots, liver disease, or breast cancer are present."
+    card = candidate(
+        "Answer: Blood clots, liver disease, or breast cancer.",
+        text,
+        text,
+        question="Which conditions contraindicate Depo-Provera?",
+        card_type="contraindication",
+    )
+    _effective, result = evaluate(card, text)
+    core = next(item for item in result["claimResults"] if item["field"] == "core_answer")
+    assert core["sourceSupport"] == "supported_by_citation"
+    assert result["publicationDisposition"] == "PUBLISH"
+
+
+def test_document_mechanics_question_is_rejected_as_low_educational_value():
+    text = "The atrium receives blood."
+    card = candidate(
+        "Answer: The.",
+        text,
+        text,
+        question="Which word begins this sentence?",
+        card_type="definition",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert result["publicationDisposition"] == "REJECT"
+    assert "LOW_EDUCATIONAL_VALUE" in result["reasonCodes"]
+    assert "LOW_EDUCATIONAL_VALUE" in result["validationCodes"]
+
+
+def test_single_token_anatomy_answer_remains_publishable():
+    text = "The atrium receives blood."
+    card = candidate(
+        "Answer: Atrium.",
+        text,
+        text,
+        question="Which cardiac chamber receives blood?",
+        card_type="anatomy",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert result["publicationDisposition"] == "PUBLISH"
+    assert "LOW_EDUCATIONAL_VALUE" not in result["reasonCodes"]
+
+
+def test_first_word_can_be_a_legitimate_developmental_learning_target():
+    text = "A child's first word is often mama."
+    card = candidate(
+        "Answer: Mama.",
+        text,
+        text,
+        question="What is a child's first word often?",
+        card_type="developmental-milestone",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert result["publicationDisposition"] == "PUBLISH"
+    assert "LOW_EDUCATIONAL_VALUE" not in result["reasonCodes"]
+
+
+def test_section_can_name_a_legitimate_anatomy_learning_target():
+    text = "The proximal tubule reabsorbs most filtered glucose."
+    card = candidate(
+        "Answer: Proximal tubule.",
+        text,
+        text,
+        question="Which section of the nephron reabsorbs most filtered glucose?",
+        card_type="anatomy",
+    )
+
+    _effective, result = evaluate(card, text)
+
+    assert result["publicationDisposition"] == "PUBLISH"
+    assert "LOW_EDUCATIONAL_VALUE" not in result["reasonCodes"]
+
+
+def test_approximate_range_is_supported_by_exact_source_range():
+    text = "80-90% of sexually active women not using birth control will become pregnant within one year."
+    card = candidate(
+        "Answer: Approximately 80-90% will become pregnant within one year.",
+        text,
+        text,
+        question="What percentage will become pregnant within one year?",
+        card_type="risk-factor",
+    )
+    _effective, result = evaluate(card, text)
+    core = next(item for item in result["claimResults"] if item["field"] == "core_answer")
+    assert core["sourceSupport"] == "supported_by_citation"
+    assert result["publicationDisposition"] == "PUBLISH"
+
+
 def test_cached_verification_rebinds_to_current_claim_identity():
     verifier = VerificationCoordinator([FixtureAuthorityAdapter(FIXTURES)])
     claim_text = "Patients taking lithium should maintain adequate salt and fluid intake."
@@ -176,6 +364,19 @@ def test_question_answer_vocabulary_mismatch_does_not_force_review():
     _effective, result = evaluate(card, text)
     assert "QUESTION_ANSWER_ENTITY_MISMATCH" not in result["reasonCodes"]
     assert result["publicationDisposition"] == "PUBLISH"
+
+
+def test_yes_no_question_is_not_treated_as_an_asserted_claim():
+    text = 'You may have heard that "You cannot get pregnant the first time." This is a myth.'
+    card = candidate(
+        "Answer: No, that statement is a myth.",
+        text,
+        text,
+        question="Is it true that a woman cannot get pregnant the first time?",
+        card_type="clinical-finding",
+    )
+    result = evaluate_once(card, [source(text)])
+    assert all(claim.location != "question" for claim in result["claims"])
 
 
 def test_medication_authority_query_extracts_lithium_not_leading_stopword():

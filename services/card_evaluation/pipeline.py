@@ -149,6 +149,7 @@ def evaluation_contract(
         "pedagogyStatus": "review" if pedagogy_review else "acceptable",
         "publicationDisposition": policy.decision,
         "reasonCodes": list(policy.reasonCodes),
+        "validationCodes": sorted({item.code for item in validations}),
         "claimResults": claim_results,
         "originalCandidate": {
             "segmentId": original_card.segmentId,

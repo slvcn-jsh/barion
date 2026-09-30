@@ -13,12 +13,13 @@ export function LoadingState({ label = 'Loading' }: { label?: string }) {
   );
 }
 
-export function EmptyState({ title, body }: { title: string; body: string }) {
+export function EmptyState({ title, body, children }: { title: string; body: string; children?: React.ReactNode }) {
   return (
     <View style={styles.center}>
       <BrandMark compact size={52} />
       <Text style={styles.title}>{title}</Text>
       <Text style={styles.label}>{body}</Text>
+      {children}
     </View>
   );
 }

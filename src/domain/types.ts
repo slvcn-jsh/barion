@@ -68,6 +68,7 @@ export const SOURCE_STATUSES = [
   'importing',
   'parsing',
   'generating',
+  'waiting-for-generation',
   'review-ready',
   'ready',
   'action-required',
@@ -293,14 +294,39 @@ export type SourceStudyGuide = {
 
 export type SourceDetail = SourceItem & {
   segments: SourceSegment[];
-  candidates: GeneratedCandidate[];
   generationJob?: GenerationJobSummary;
   studyGuide?: SourceStudyGuide;
+};
+
+export type StudyQueueEmptyReason =
+  | 'ready'
+  | 'no-cards'
+  | 'daily-review-limit'
+  | 'daily-new-limit'
+  | 'not-due'
+  | 'no-weak-cards'
+  | 'suspended'
+  | 'buried'
+  | 'needs-review';
+
+export type StudyQueueResult = {
+  cards: StudyCard[];
+  totalActive: number;
+  availableNow: number;
+  emptyReason: StudyQueueEmptyReason;
+  excluded: {
+    notDue: number;
+    suspended: number;
+    buried: number;
+    needsReview: number;
+    dailyLimit: number;
+  };
 };
 
 export type GeneratedCandidate = {
   id: string;
   jobId: string;
+  targetId?: string | null;
   segmentId: string | null;
   cardType: string;
   learningObjective: string;
@@ -344,6 +370,8 @@ export type GenerationJobSummary = {
   remoteCandidateCount: number;
   publishedCardCount: number;
   heldCandidateCount: number;
+  attemptCount: number;
+  nextAttemptAt?: string | null;
   durationMs?: number | null;
   createdAt: string;
   updatedAt?: string | null;

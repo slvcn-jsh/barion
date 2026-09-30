@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import { seedDatabaseIfNeeded } from '@/storage/seed';
 
-export const DATABASE_VERSION = 22;
+export const DATABASE_VERSION = 27;
 
 let database: SQLite.SQLiteDatabase | null = null;
 let initializationPromise: Promise<void> | null = null;
@@ -175,6 +175,8 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       model_id TEXT NOT NULL DEFAULT 'barion-extractive-rules',
       prompt_id TEXT NOT NULL DEFAULT 'extractive-rules',
       prompt_version TEXT NOT NULL DEFAULT 'extractive-v1',
+      purpose TEXT NOT NULL DEFAULT 'local-baseline',
+      generation_key TEXT,
       request_id TEXT,
       provider_request_id TEXT,
       input_tokens INTEGER,
@@ -189,6 +191,9 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
       held_candidate_count INTEGER NOT NULL DEFAULT 0,
       duration_ms INTEGER,
       failure_reason TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      candidate_checkpoint_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );
@@ -196,6 +201,7 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
     CREATE TABLE IF NOT EXISTS generated_candidates (
       id TEXT PRIMARY KEY NOT NULL,
       job_id TEXT NOT NULL REFERENCES generation_jobs(id) ON DELETE CASCADE,
+      target_id TEXT,
       segment_id TEXT REFERENCES source_segments(id) ON DELETE SET NULL,
       card_type TEXT NOT NULL DEFAULT 'source-review',
       learning_objective TEXT NOT NULL DEFAULT '',
@@ -450,7 +456,47 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
 
   const repairedColumns = await ensureRequiredColumns(db);
 
+  if (currentVersion < 26) {
+    await db.execAsync(`
+      UPDATE generation_jobs
+      SET purpose = CASE
+        WHEN attempted_provider_id IS NOT NULL
+          OR provider_id != 'local-extractive'
+          OR generation_mode IN ('REMOTE_AI', 'PARTIAL_REMOTE_WITH_FALLBACK')
+          THEN 'smart-enhancement'
+        ELSE 'local-baseline'
+      END;
+    `);
+  }
+
   await recoverInterruptedGenerationJobs(db);
+
+  if (currentVersion < 26) {
+    await db.execAsync(`
+      UPDATE generation_jobs
+      SET generation_key = source_id || ':' ||
+          (SELECT sources.sha256 FROM sources WHERE sources.id = generation_jobs.source_id) || ':' ||
+          purpose || ':' || prompt_id || ':' || prompt_version
+      WHERE source_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM sources WHERE sources.id = generation_jobs.source_id);
+
+      WITH ranked_active_jobs AS (
+        SELECT id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY generation_key
+                 ORDER BY created_at DESC, rowid DESC
+               ) AS active_rank
+        FROM generation_jobs
+        WHERE generation_key IS NOT NULL
+          AND status IN ('queued', 'running', 'publishing')
+      )
+      UPDATE generation_jobs
+      SET status = 'superseded', updated_at = COALESCE(updated_at, created_at)
+      WHERE id IN (
+        SELECT id FROM ranked_active_jobs WHERE active_rank > 1
+      );
+    `);
+  }
 
   if (currentVersion < 11) {
     await db.execAsync(`
@@ -566,6 +612,10 @@ async function migrateDatabase(db: SQLite.SQLiteDatabase, currentVersion: number
     `);
   }
 
+  if (currentVersion < 23) {
+    await retireLegacyPendingCandidates(db);
+  }
+
   await repairInvalidSourceStatuses(db);
 
   const needsSourceDeckRepair =
@@ -593,7 +643,7 @@ async function repairInvalidSourceStatuses(db: SQLite.SQLiteDatabase) {
      SET status = 'action-required',
          ingestion_error = ?
      WHERE status IS NULL
-        OR status NOT IN ('importing', 'parsing', 'generating', 'review-ready', 'ready', 'action-required', 'failed')`,
+        OR status NOT IN ('importing', 'parsing', 'generating', 'waiting-for-generation', 'review-ready', 'ready', 'action-required', 'failed')`,
     'Barion could not restore this source state. Try processing the material again.',
   );
 }
@@ -653,6 +703,7 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'REAL NOT NULL DEFAULT 0',
     ),
     generatedCandidateSegmentId: await addColumnIfMissing(db, 'generated_candidates', 'segment_id', 'TEXT'),
+    generatedCandidateTargetId: await addColumnIfMissing(db, 'generated_candidates', 'target_id', 'TEXT'),
     generationJobProviderId: await addColumnIfMissing(
       db,
       'generation_jobs',
@@ -677,6 +728,13 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
       'prompt_version',
       "TEXT NOT NULL DEFAULT 'extractive-v1'",
     ),
+    generationJobPurpose: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'purpose',
+      "TEXT NOT NULL DEFAULT 'local-baseline'",
+    ),
+    generationJobKey: await addColumnIfMissing(db, 'generation_jobs', 'generation_key', 'TEXT'),
     generationJobRequestId: await addColumnIfMissing(db, 'generation_jobs', 'request_id', 'TEXT'),
     generationJobProviderRequestId: await addColumnIfMissing(db, 'generation_jobs', 'provider_request_id', 'TEXT'),
     generationJobInputTokens: await addColumnIfMissing(db, 'generation_jobs', 'input_tokens', 'INTEGER'),
@@ -711,8 +769,21 @@ async function ensureRequiredColumns(db: SQLite.SQLiteDatabase) {
     ),
     generationJobDurationMs: await addColumnIfMissing(db, 'generation_jobs', 'duration_ms', 'INTEGER'),
     generationJobFailureReason: await addColumnIfMissing(db, 'generation_jobs', 'failure_reason', 'TEXT'),
+    generationJobAttemptCount: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'attempt_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
+    generationJobNextAttemptAt: await addColumnIfMissing(db, 'generation_jobs', 'next_attempt_at', 'TEXT'),
     generationJobUpdatedAt: await addColumnIfMissing(db, 'generation_jobs', 'updated_at', 'TEXT'),
     generationJobBatchMetadata: await addColumnIfMissing(db, 'generation_jobs', 'batch_metadata_json', 'TEXT'),
+    generationJobCandidateCheckpoint: await addColumnIfMissing(
+      db,
+      'generation_jobs',
+      'candidate_checkpoint_json',
+      'TEXT',
+    ),
     generatedCandidatePublishedCardId: await addColumnIfMissing(
       db,
       'generated_candidates',
@@ -858,8 +929,55 @@ export async function normalizeGenerationJobProvenance(db: SQLite.SQLiteDatabase
         held_candidate_count = (
           SELECT COUNT(*) FROM generated_candidates
           WHERE generated_candidates.job_id = generation_jobs.id
-            AND generated_candidates.status <> 'approved'
+            AND generated_candidates.status = 'pending'
         );
+  `);
+}
+
+export async function retireLegacyPendingCandidates(db: SQLite.SQLiteDatabase) {
+  await db.execAsync(`
+    UPDATE generated_candidates
+    SET status = 'rejected'
+    WHERE status = 'pending'
+      AND job_id IN (
+        SELECT id FROM generation_jobs WHERE status = 'awaiting-review'
+      );
+
+    UPDATE generation_jobs
+    SET status = 'completed',
+        summary = CASE
+          WHEN published_card_count > 0
+            THEN published_card_count || ' strong cards are ready to study; remaining candidates were omitted.'
+          ELSE 'No candidate passed the automatic safety and quality gates.'
+        END,
+        held_candidate_count = 0,
+        updated_at = COALESCE(updated_at, created_at)
+    WHERE status = 'awaiting-review';
+
+    UPDATE sources
+    SET status = CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM cards
+            JOIN notes ON notes.id = cards.note_id
+            WHERE notes.source_id = sources.id
+              AND cards.deleted_at IS NULL
+              AND cards.status IN ('verified', 'source_extracted')
+          ) THEN 'ready'
+          ELSE 'action-required'
+        END,
+        ingestion_error = CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM cards
+            JOIN notes ON notes.id = cards.note_id
+            WHERE notes.source_id = sources.id
+              AND cards.deleted_at IS NULL
+              AND cards.status IN ('verified', 'source_extracted')
+          ) THEN NULL
+          ELSE 'No trustworthy study cards were created from this file. Try a clearer source.'
+        END
+    WHERE status = 'review-ready';
   `);
 }
 
@@ -867,7 +985,27 @@ export async function recoverInterruptedGenerationJobs(db: SQLite.SQLiteDatabase
   const interruptedAt = new Date().toISOString();
   await db.runAsync(
     `UPDATE sources
-     SET status = 'failed', ingestion_error = 'Deck preparation was interrupted. Try again.'
+     SET status = CASE
+           WHEN (
+             SELECT interrupted_jobs.purpose
+             FROM generation_jobs AS interrupted_jobs
+             WHERE interrupted_jobs.source_id = sources.id
+             ORDER BY interrupted_jobs.created_at DESC, interrupted_jobs.rowid DESC
+             LIMIT 1
+           ) = 'local-baseline' THEN 'generating'
+           ELSE 'waiting-for-generation'
+         END,
+         ingestion_error = CASE
+           WHEN (
+             SELECT interrupted_jobs.purpose
+             FROM generation_jobs AS interrupted_jobs
+             WHERE interrupted_jobs.source_id = sources.id
+             ORDER BY interrupted_jobs.created_at DESC, interrupted_jobs.rowid DESC
+             LIMIT 1
+           ) = 'local-baseline'
+             THEN 'Initial card preparation was interrupted and is safely queued to resume.'
+           ELSE 'Deck preparation was interrupted. This source is safely queued for Smart Generation.'
+         END
      WHERE id IN (
        SELECT interrupted_jobs.source_id
        FROM generation_jobs AS interrupted_jobs
@@ -884,10 +1022,16 @@ export async function recoverInterruptedGenerationJobs(db: SQLite.SQLiteDatabase
   );
   await db.runAsync(
     `UPDATE generation_jobs
-     SET status = 'failed', generation_mode = 'FAILED',
-         summary = 'Deck preparation was interrupted. Try again.',
-         failure_reason = 'interrupted', updated_at = ?
+     SET status = 'queued', generation_mode = NULL,
+         summary = CASE
+           WHEN purpose = 'local-baseline'
+             THEN 'Waiting to resume initial source-matched card generation.'
+           ELSE 'Waiting for Smart Generation. Source and existing cards are safe.'
+         END,
+         fallback_used = 0, fallback_reason = NULL,
+         failure_reason = 'interrupted', next_attempt_at = ?, updated_at = ?
      WHERE status IN ('running', 'publishing')`,
+    interruptedAt,
     interruptedAt,
   );
   await normalizeGenerationJobProvenance(db);
@@ -1247,9 +1391,13 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_decks_visibility ON decks(deleted_at, archived_at, updated_at);
     CREATE INDEX IF NOT EXISTS idx_decks_copy_lineage ON decks(copied_from_deck_id);
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_source_id ON generation_jobs(source_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_generation_jobs_generation_key ON generation_jobs(generation_key, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_jobs_active_source
       ON generation_jobs(source_id)
       WHERE status IN ('running', 'publishing');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_jobs_active_key
+      ON generation_jobs(generation_key)
+      WHERE generation_key IS NOT NULL AND status IN ('queued', 'running', 'publishing');
     CREATE INDEX IF NOT EXISTS idx_generation_jobs_request_id ON generation_jobs(request_id);
     CREATE INDEX IF NOT EXISTS idx_card_learning_weak ON card_learning_state(is_suspended, weak_score DESC);
     CREATE INDEX IF NOT EXISTS idx_card_learning_buried ON card_learning_state(buried_until, is_suspended);
@@ -1259,6 +1407,7 @@ async function createIndexes(db: SQLite.SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_test_responses_session ON test_responses(session_id, answered_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_test_responses_session_card ON test_responses(session_id, card_id);
     CREATE INDEX IF NOT EXISTS idx_generated_candidates_job_status ON generated_candidates(job_id, status);
+    CREATE INDEX IF NOT EXISTS idx_generated_candidates_job_target ON generated_candidates(job_id, target_id);
     CREATE INDEX IF NOT EXISTS idx_sync_operations_status ON sync_operations(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_library_trash_active ON library_trash(restored_at, deleted_at);
     CREATE INDEX IF NOT EXISTS idx_course_modules_course ON course_modules(course_id, position);

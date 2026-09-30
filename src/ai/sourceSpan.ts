@@ -65,6 +65,17 @@ export async function resolveSourceSpan(
       ? resolved(base, 'context-disambiguated', selected.start, selected.end, normalized.length)
       : { ...base, status: 'ambiguous', startOffset: null, endOffset: null, matchCount: normalized.length };
   }
+
+  const layoutMatches = boundedLayoutMatches(sourceText, evidenceText);
+  if (layoutMatches.length === 1) {
+    return resolved(base, 'normalized', layoutMatches[0].start, layoutMatches[0].end, 1);
+  }
+  if (layoutMatches.length > 1) {
+    const selected = selectWithContext(sourceText, layoutMatches, options);
+    return selected
+      ? resolved(base, 'context-disambiguated', selected.start, selected.end, layoutMatches.length)
+      : { ...base, status: 'ambiguous', startOffset: null, endOffset: null, matchCount: layoutMatches.length };
+  }
   return { ...base, status: 'not-found', startOffset: null, endOffset: null, matchCount: 0 };
 }
 
@@ -126,6 +137,85 @@ function normalizeWithMap(value: string) {
     index = characterEnd;
   }
   return { text, starts, ends };
+}
+
+type SourceToken = { value: string; start: number; end: number };
+
+const MIN_LAYOUT_EVIDENCE_TOKENS = 8;
+const MAX_SKIPPED_TOKENS_PER_STEP = 12;
+const MAX_TOTAL_SKIPPED_TOKENS = 40;
+const UNSAFE_SKIPPED_TOKENS = new Set(['no', 'not', 'never', 'without', 'cannot', 'cant']);
+
+/**
+ * Recovers evidence whose words remain in source order but were separated by
+ * text from adjacent PDF table columns. Bounds and unsafe-token checks keep
+ * this from becoming fuzzy semantic matching.
+ */
+function boundedLayoutMatches(sourceText: string, evidenceText: string) {
+  const sourceTokens = sourceTokenize(sourceText);
+  const evidenceTokens = sourceTokenize(evidenceText);
+  if (evidenceTokens.length < MIN_LAYOUT_EVIDENCE_TOKENS || sourceTokens.length < evidenceTokens.length) return [];
+
+  const matches: Array<{ start: number; end: number }> = [];
+  const allowedTotalSkipped = Math.min(MAX_TOTAL_SKIPPED_TOKENS, evidenceTokens.length * 2);
+  for (let startIndex = 0; startIndex < sourceTokens.length; startIndex += 1) {
+    if (sourceTokens[startIndex].value !== evidenceTokens[0].value) continue;
+    let sourceIndex = startIndex;
+    let valid = true;
+    for (let evidenceIndex = 1; evidenceIndex < evidenceTokens.length; evidenceIndex += 1) {
+      const next = findNextToken(sourceTokens, evidenceTokens[evidenceIndex].value, sourceIndex + 1);
+      if (next < 0 || next - sourceIndex - 1 > MAX_SKIPPED_TOKENS_PER_STEP) {
+        valid = false;
+        break;
+      }
+      if (sourceTokens.slice(sourceIndex + 1, next).some(({ value }) => unsafeSkippedToken(value))) {
+        valid = false;
+        break;
+      }
+      sourceIndex = next;
+    }
+    const totalSkipped = sourceIndex - startIndex + 1 - evidenceTokens.length;
+    if (!valid || totalSkipped < 1 || totalSkipped > allowedTotalSkipped) continue;
+    matches.push({ start: sourceTokens[startIndex].start, end: sourceTokens[sourceIndex].end });
+  }
+  return dedupeSpans(matches);
+}
+
+function sourceTokenize(value: string): SourceToken[] {
+  const tokens: SourceToken[] = [];
+  const pattern = /[\p{L}\p{N}]+/gu;
+  for (const match of value.matchAll(pattern)) {
+    const start = match.index;
+    if (start === undefined) continue;
+    tokens.push({
+      value: match[0].normalize('NFKC').toLocaleLowerCase('en-US'),
+      start,
+      end: start + match[0].length,
+    });
+  }
+  return tokens;
+}
+
+function findNextToken(tokens: SourceToken[], value: string, startIndex: number) {
+  const endIndex = Math.min(tokens.length, startIndex + MAX_SKIPPED_TOKENS_PER_STEP + 1);
+  for (let index = startIndex; index < endIndex; index += 1) {
+    if (tokens[index].value === value) return index;
+  }
+  return -1;
+}
+
+function unsafeSkippedToken(value: string) {
+  return UNSAFE_SKIPPED_TOKENS.has(value) || /\d/u.test(value);
+}
+
+function dedupeSpans(spans: Array<{ start: number; end: number }>) {
+  const seen = new Set<string>();
+  return spans.filter(({ start, end }) => {
+    const key = `${start}:${end}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function splitsSurrogatePair(value: string, offset: number) {

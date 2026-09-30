@@ -20,6 +20,7 @@ import type { Session } from '@supabase/supabase-js';
 import { AppButton } from '@/components/AppButton';
 import { BrandMark } from '@/components/BrandMark';
 import { initializeDatabase } from '@/storage/database';
+import { resumeQueuedGenerationJobs } from '@/storage/repository';
 import { colors, fonts } from '@/theme/colors';
 import { restoreSession, onAuthStateChange, signOut, AuthContext } from '@/auth';
 
@@ -45,7 +46,14 @@ export default function RootLayout() {
     setDatabaseError(null);
     setDatabaseReady(false);
     void initializeDatabase()
-      .then(() => setDatabaseReady(true))
+      .then(() => {
+        setDatabaseReady(true);
+        void resumeQueuedGenerationJobs().catch((error) => {
+          if (process.env.NODE_ENV === 'development') {
+            console.warn('barion.ai.queue_resume_failed', error);
+          }
+        });
+      })
       .catch((error) => setDatabaseError(formatDatabaseError(error)));
   }, []);
 

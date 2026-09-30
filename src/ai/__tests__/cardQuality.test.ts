@@ -22,6 +22,8 @@ const strongCard: GroundedCardCandidate = {
 describe('gateway card quality', () => {
   it('rewards complete active-recall cards and clamps scores to the upper bound', () => {
     expect(evaluateGatewayCardQuality(strongCard)).toBe(0.98);
+    expect(describeGatewayCardQuality(strongCard, 0.98)).toContain('Automated check score 98%');
+    expect(describeGatewayCardQuality(strongCard, 0.98)).not.toContain('% quality');
   });
 
   it('penalizes vague source-dependent questions below the publishing threshold', () => {
@@ -60,6 +62,20 @@ describe('gateway card quality', () => {
 
     expect(score).toBeLessThan(0.82);
     expect(describeGatewayCardQuality(unstructuredCard, score)).toContain('structured answer is incomplete');
+  });
+
+  it('does not punish a publishable card after unsupported optional sections were sanitized', () => {
+    const sanitizedCard: GroundedCardCandidate = {
+      ...strongCard,
+      answer: 'Answer: It reduces hepatic glucose production.',
+      evaluation: {
+        sanitization: { finalDisposition: 'PUBLISH' },
+      } as NonNullable<GroundedCardCandidate['evaluation']>,
+    };
+
+    expect(evaluateGatewayCardQuality(sanitizedCard)).toBeGreaterThanOrEqual(0.82);
+    expect(describeGatewayCardQuality(sanitizedCard, evaluateGatewayCardQuality(sanitizedCard)))
+      .not.toContain('structured answer is incomplete');
   });
 
   it('keeps every score within the documented bounds', () => {

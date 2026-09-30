@@ -12,6 +12,8 @@ export function getSourceStatusMeta(status: unknown) {
       return { label: 'Extracting', description: 'Reading text and preserving page locations.', progress: 0.42, tone: 'active' as const };
     case 'generating':
       return { label: 'Building study set', description: 'Finding concepts and publishing source-grounded cards.', progress: 0.68, tone: 'active' as const };
+    case 'waiting-for-generation':
+      return { label: 'Waiting for Smart Generation', description: 'Source is safe. Barion will retry high-quality card generation.', progress: 0.58, tone: 'waiting' as const };
     case 'review-ready':
       return { label: 'Check exceptions', description: 'A few uncertain cards need attention.', progress: 0.84, tone: 'review' as const };
     case 'ready':
@@ -33,7 +35,15 @@ export function getSourceStatusMeta(status: unknown) {
 export function SourceStatusPill({ status }: { status: SourceStatus }) {
   const meta = getSourceStatusMeta(status);
   const isActive = meta.tone === 'active';
-  const icon = meta.tone === 'success' ? 'checkmark-circle' : meta.tone === 'review' ? 'sparkles' : meta.tone === 'danger' ? 'alert-circle' : 'information-circle';
+  const icon = meta.tone === 'success'
+    ? 'checkmark-circle'
+    : meta.tone === 'review'
+      ? 'sparkles'
+      : meta.tone === 'danger'
+        ? 'alert-circle'
+        : meta.tone === 'waiting'
+          ? 'cloud-outline'
+          : 'information-circle';
 
   return (
     <View style={[styles.pill, styles[meta.tone]]}>
@@ -90,5 +100,11 @@ const styles = StyleSheet.create({
   },
   warningText: {
     color: '#9a5b09',
+  },
+  waiting: {
+    backgroundColor: colors.surfaceMuted,
+  },
+  waitingText: {
+    color: colors.blueDark,
   },
 });

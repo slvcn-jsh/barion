@@ -95,17 +95,17 @@ export default function ProfileScreen() {
         <OptionGroup value={profile.sessionLength} choices={SESSION_LENGTHS} onChange={(sessionLength) => void choose({ sessionLength })} />
       </ProfileSection>
 
-      <View style={styles.twoColumn}>
-        <ProfileSection title="Test feedback" body="Choose whether answers appear as you go or together at the end.">
+      <View style={styles.sectionRow}>
+        <ProfileSection title="Test feedback" body="Choose whether answers appear as you go or together at the end." half>
           <OptionGroup value={profile.feedbackTiming} choices={FEEDBACK} onChange={(feedbackTiming) => void choose({ feedbackTiming })} />
         </ProfileSection>
-        <ProfileSection title="Source evidence" body="Evidence always remains one tap away; this controls its default detail.">
+        <ProfileSection title="Source evidence" body="Evidence always remains one tap away; this controls its default detail." half>
           <OptionGroup value={profile.evidenceDisplay} choices={EVIDENCE} onChange={(evidenceDisplay) => void choose({ evidenceDisplay })} />
         </ProfileSection>
       </View>
 
       <ProfileSection title="Daily workload guardrails" body="These are safety rails, not streak penalties. Zero means unlimited.">
-        <View style={styles.twoColumn}>
+        <View style={styles.guardrailsGrid}>
           <View style={styles.limitBlock}>
             <Text style={styles.limitLabel}>NEW CARDS PER DAY</Text>
             <OptionGroup value={profile.dailyNewLimit} choices={NEW_LIMITS} onChange={(dailyNewLimit) => void choose({ dailyNewLimit })} />
@@ -150,8 +150,8 @@ export default function ProfileScreen() {
   );
 }
 
-function ProfileSection({ title, body, children }: { title: string; body: string; children: React.ReactNode }) {
-  return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.body}>{body}</Text>{children}</View>;
+function ProfileSection({ title, body, children, half }: { title: string; body: string; children: React.ReactNode; half?: boolean }) {
+  return <View style={[styles.section, half && styles.sectionHalf]}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.body}>{body}</Text>{children}</View>;
 }
 
 function OptionGroup<T extends string | number>({ value, choices, onChange }: { value: T; choices: Choice<T>[]; onChange: (value: T) => void }) {
@@ -251,9 +251,10 @@ const styles = StyleSheet.create({
   heroIcon: { alignItems: 'center', backgroundColor: colors.blue, borderRadius: 16, height: 54, justifyContent: 'center', width: 54 },
   limitBlock: { flex: 1, gap: 9, minWidth: 260 },
   limitLabel: { color: colors.blueDark, fontFamily: fonts.bold, fontSize: 10, letterSpacing: 1 },
+  guardrailsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, width: '100%' },
   note: { alignItems: 'center', backgroundColor: colors.surfaceTeal, borderRadius: radii.md, flexDirection: 'row', gap: 10, padding: 14 },
   noteText: { color: colors.tealDark, flex: 1, fontFamily: fonts.semibold, fontSize: 12, lineHeight: 18 },
-  option: { backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, flex: 1, gap: 5, minHeight: 82, minWidth: 175, padding: 12 },
+  option: { backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.md, borderWidth: 1, flex: 1, gap: 5, minHeight: 74, minWidth: 120, padding: 12 },
   optionDetail: { color: colors.muted, fontFamily: fonts.regular, fontSize: 11, lineHeight: 17 },
   optionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   optionLabel: { color: colors.ink, flex: 1, fontFamily: fonts.bold, fontSize: 13 },
@@ -264,8 +265,10 @@ const styles = StyleSheet.create({
   recommended: { color: colors.tealDark, fontFamily: fonts.bold, fontSize: 8, letterSpacing: 0.5 },
   savedBadge: { alignItems: 'center', backgroundColor: colors.surfaceTeal, borderRadius: radii.pill, flexDirection: 'row', gap: 5, paddingHorizontal: 10, paddingVertical: 7 },
   savedText: { color: colors.tealDark, fontFamily: fonts.bold, fontSize: 10 },
-  section: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.lg, borderWidth: 1, flex: 1, gap: 10, padding: 18 },
+  section: { backgroundColor: colors.surface, borderColor: colors.line, borderRadius: radii.lg, borderWidth: 1, gap: 10, padding: 18, width: '100%' },
+  sectionHalf: { flex: 1, minWidth: 280 },
+  sectionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%' },
   sectionTitle: { color: colors.ink, fontFamily: fonts.bold, fontSize: 18 },
   title: { color: colors.surface, fontFamily: fonts.extraBold, fontSize: 25, lineHeight: 32 },
-  twoColumn: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  twoColumn: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, width: '100%' },
 });

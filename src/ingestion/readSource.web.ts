@@ -1,4 +1,5 @@
 import { SourceActionRequiredError, type ExtractedPage, type SourceAssetInput } from './types';
+import { structurePdfText, type PdfLayoutTextItem } from './pdfLayout';
 
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
 const MAX_PDF_PAGES = 160;
@@ -63,7 +64,7 @@ async function extractPdfPages(buffer: ArrayBuffer): Promise<ExtractedPage[]> {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
       const page = await document.getPage(pageNumber);
       const content = await page.getTextContent();
-      const text = structurePdfText(content.items as PdfTextItem[])
+      const text = structurePdfText(content.items as PdfLayoutTextItem[])
         .replace(/[ \t]+\n/g, '\n')
         .replace(/[ \t]{2,}/g, ' ')
         .trim();
@@ -93,49 +94,6 @@ async function extractPdfPages(buffer: ArrayBuffer): Promise<ExtractedPage[]> {
   } finally {
     await loadingTask.destroy();
   }
-}
-
-type PdfTextItem = {
-  str?: string;
-  hasEOL?: boolean;
-  height?: number;
-  transform?: number[];
-};
-
-function structurePdfText(items: PdfTextItem[]) {
-  const readable = items.filter((item) => item.str?.trim());
-  const sizes = readable
-    .map((item) => Math.abs(item.height ?? item.transform?.[3] ?? 0))
-    .filter((size) => size > 0)
-    .sort((a, b) => a - b);
-  const bodySize = sizes[Math.floor(sizes.length / 2)] || 11;
-  let output = '';
-  let previous: PdfTextItem | undefined;
-
-  for (const item of readable) {
-    const value = item.str?.trim();
-    if (!value) continue;
-
-    const size = Math.abs(item.height ?? item.transform?.[3] ?? bodySize);
-    const isHeading = size >= bodySize * 1.3 && value.length <= 120;
-    const currentY = item.transform?.[5];
-    const previousY = previous?.transform?.[5];
-    const verticalGap = currentY !== undefined && previousY !== undefined
-      ? Math.abs(previousY - currentY)
-      : 0;
-
-    if (output) {
-      if (isHeading || verticalGap > bodySize * 1.8) output += '\n\n';
-      else if (previous?.hasEOL || verticalGap > bodySize * 0.45) output += '\n';
-      else output += ' ';
-    }
-
-    output += isHeading ? `# ${value}` : value;
-    if (isHeading) output += '\n\n';
-    previous = item;
-  }
-
-  return output;
 }
 
 function isPdf(asset: SourceAssetInput) {

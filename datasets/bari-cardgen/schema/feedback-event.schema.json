@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://barion.local/schemas/bari-feedback-event-v1.json",
+  "title": "Bari card feedback event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId", "eventVersion", "eventType", "occurredAt", "artifactId",
+    "signalClass", "humanReviewed", "trainingEligibility"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "eventVersion": { "const": "1.0.0" },
+    "eventType": {
+      "enum": [
+        "card_accepted", "card_edited", "card_deleted", "card_regenerated", "card_flagged",
+        "card_studied", "card_answered_incorrectly", "card_marked_unclear", "source_mismatch",
+        "duplicate_detected", "answer_corrected"
+      ]
+    },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "artifactId": { "type": "string", "minLength": 1 },
+    "signalClass": { "enum": ["behavioral", "supervised-label"] },
+    "humanReviewed": { "type": "boolean" },
+    "trainingEligibility": { "enum": ["eligible", "inference-analytics-only", "rejected"] }
+  }
+}

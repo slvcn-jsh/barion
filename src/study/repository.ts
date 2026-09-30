@@ -1,6 +1,3 @@
-import type * as SQLite from 'expo-sqlite';
-import { Platform } from 'react-native';
-
 import { createId, nowIso } from '@/domain/ids';
 import type {
   StudyActivityOutcome,
@@ -10,6 +7,7 @@ import type {
 } from '@/domain/types';
 import { modeCanRepeatMisses, nextShortTermDue } from '@/study/engine';
 import { getDatabase } from '@/storage/database';
+import { runWriteTransaction } from '@/storage/repositories/shared';
 
 type ActivityResult = {
   requeue: boolean;
@@ -148,15 +146,4 @@ function outcomeDelta(outcome: StudyActivityOutcome) {
     case 'viewed':
       return 0;
   }
-}
-
-async function runWriteTransaction(
-  db: SQLite.SQLiteDatabase,
-  task: (txn: SQLite.SQLiteDatabase) => Promise<void>,
-) {
-  if (Platform.OS === 'web') {
-    await db.withTransactionAsync(async () => task(db));
-    return;
-  }
-  await db.withExclusiveTransactionAsync(task);
 }

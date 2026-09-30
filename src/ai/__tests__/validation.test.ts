@@ -30,6 +30,8 @@ describe('parseGroundedCardResponse', () => {
 
   it('revalidates production evaluation metadata and keeps claim-level grounding', async () => {
     const span = await resolveSourceSpan(segments[0].text, segments[0].text);
+    const evaluation = evaluated(span);
+    evaluation.validationCodes = ['NUMERIC_CLAIM_CLASSIFIED'];
     const result = await parseGroundedCardResponse({
       candidates: [{
         segmentId: 'segment-1',
@@ -39,13 +41,14 @@ describe('parseGroundedCardResponse', () => {
         answer: 'Answer: Metformin reduces hepatic glucose production and improves insulin sensitivity.',
         evidenceText: segments[0].text,
         evidenceSpan: span,
-        evaluation: evaluated(span),
+        evaluation,
       }],
     }, segments, 3);
 
     expect(result[0].evaluation).toEqual(expect.objectContaining({
       publicationDisposition: 'PUBLISH',
       sourceClaimSupported: 'supported',
+      validationCodes: ['NUMERIC_CLAIM_CLASSIFIED'],
       claimResults: [expect.objectContaining({ sourceSupport: 'supported_by_citation' })],
     }));
   });

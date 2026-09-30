@@ -24,12 +24,18 @@ const MECHANICAL_TRANSFORM = /\bwhat (?:may|might|can) occur when\b|\bwhat is th
 
 export function evaluateGatewayCardQuality(draft: GroundedCardCandidate): number {
   const structuredLabelCount = STRUCTURED_ANSWER_LABELS.filter((pattern) => pattern.test(draft.answer)).length;
+  const safelySanitized = draft.evaluation?.sanitization?.finalDisposition === 'PUBLISH';
+  const safelyGroundedCore = draft.evaluation?.publicationDisposition === 'PUBLISH'
+    && draft.evaluation.sourceClaimSupported === 'supported'
+    && structuredLabelCount >= 1;
   let score = 0.52;
 
   if (draft.question.length >= 15 && draft.question.length <= 250) score += 0.08;
   if (draft.question.trim().endsWith('?')) score += 0.03;
   if (structuredLabelCount === STRUCTURED_ANSWER_LABELS.length) {
     score += 0.18;
+  } else if (safelySanitized || safelyGroundedCore) {
+    score += 0.15;
   } else {
     score += structuredLabelCount * 0.03;
     score -= 0.10;
@@ -50,7 +56,11 @@ export function describeGatewayCardQuality(draft: GroundedCardCandidate, score: 
   if (VAGUE_QUESTION.test(draft.question)) issues.push('question depends on source wording');
   if (COMPOUND_QUESTION.test(draft.question)) issues.push('question is compound rather than atomic');
   if (MECHANICAL_TRANSFORM.test(draft.question)) issues.push('question is mechanically transformed from source text');
-  if (!STRUCTURED_ANSWER_LABELS.every((pattern) => pattern.test(draft.answer))) {
+  const safelySanitized = draft.evaluation?.sanitization?.finalDisposition === 'PUBLISH';
+  const safelyGroundedCore = draft.evaluation?.publicationDisposition === 'PUBLISH'
+    && draft.evaluation.sourceClaimSupported === 'supported'
+    && STRUCTURED_ANSWER_LABELS[0].test(draft.answer);
+  if (!safelySanitized && !safelyGroundedCore && !STRUCTURED_ANSWER_LABELS.every((pattern) => pattern.test(draft.answer))) {
     issues.push('structured answer is incomplete');
   }
   if (!SUPPORTED_CARD_TYPES.has(draft.cardType)) issues.push('card type is unsupported');
@@ -58,7 +68,7 @@ export function describeGatewayCardQuality(draft: GroundedCardCandidate, score: 
 
   const reviewReason = issues.length ? issues.join('; ') : 'AI-generated content requires user review';
   const typeLabel = draft.cardType.replace(/-/g, ' ');
-  return `${Math.round(score * 100)}% quality · AI active recall · ${typeLabel} · held before publishing: ${reviewReason}.`;
+  return `Automated check score ${Math.round(score * 100)}% · AI active recall · ${typeLabel} · held before publishing: ${reviewReason}.`;
 }
 
 export function shouldAutoPublishCandidate(qualityScore: number, _isLocalExtractive: boolean, threshold: number): boolean {

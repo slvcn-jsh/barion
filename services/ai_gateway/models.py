@@ -22,7 +22,7 @@ class SourceSegment(StrictModel):
 class CardGenerationRequest(StrictModel):
     requestId: str = Field(min_length=1, max_length=200)
     promptId: Literal["grounded-card-generation"]
-    promptVersion: Literal["1.0.0", "1.1.0", "1.2.0"]
+    promptVersion: Literal["1.0.0", "1.1.0", "1.2.0", "1.3.0", "1.4.0"]
     systemPrompt: str = Field(min_length=1, max_length=8_000)
     userPrompt: str = Field(min_length=1, max_length=200_000)
     minCandidates: int = Field(default=1, ge=1, le=100)
@@ -68,6 +68,7 @@ class CandidateEvaluation(StrictModel):
     pedagogyStatus: Literal["not_evaluated", "acceptable", "review"]
     publicationDisposition: Literal["PUBLISH", "SANITIZE", "REVIEW", "REJECT"]
     reasonCodes: list[str]
+    validationCodes: list[str] = Field(default_factory=list)
     claimResults: list["ClaimEvaluation"]
     originalCandidate: "OriginalCandidate"
     sanitization: "SanitizationResult | None" = None
@@ -130,6 +131,8 @@ class SanitizationResult(StrictModel):
 
 
 class GeneratedCard(StrictModel):
+    targetId: str | None = Field(default=None, min_length=1, max_length=200)
+    frontStyle: Literal["term", "question"] | None = None
     segmentId: str = Field(min_length=1, max_length=200)
     cardType: str = Field(min_length=1, max_length=80)
     learningObjective: str = Field(min_length=3, max_length=300)
@@ -157,6 +160,11 @@ class CardGenerationResponse(StrictModel):
     usage: ProviderUsage | None = None
 
 
+class BariChatMessagePayload(StrictModel):
+    role: Literal["user", "bari", "model", "assistant"]
+    text: str = Field(min_length=1, max_length=8_000)
+
+
 class BariChatRequest(StrictModel):
     conversationId: str | None = Field(default=None, max_length=200)
     message: str = Field(min_length=1, max_length=8_000)
@@ -166,6 +174,7 @@ class BariChatRequest(StrictModel):
     deckId: str | None = Field(default=None, max_length=200)
     documentIds: list[str] = Field(default_factory=list, max_length=100)
     evidence: list[SourceSegment] = Field(default_factory=list, max_length=20)
+    history: list[BariChatMessagePayload] = Field(default_factory=list, max_length=50)
 
 
 class BariGeneration(StrictModel):

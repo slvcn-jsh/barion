@@ -10,6 +10,7 @@ import re
 from time import monotonic
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 from pydantic import ValidationError
@@ -46,6 +47,8 @@ _CARD_SCHEMA: dict[str, Any] = {
                     "evidenceText",
                 ],
                 "properties": {
+                    "targetId": {"type": "string"},
+                    "frontStyle": {"type": "string", "enum": ["term", "question"]},
                     "segmentId": {"type": "string"},
                     "cardType": {"type": "string"},
                     "learningObjective": {"type": "string"},
@@ -78,6 +81,8 @@ class GeminiGenerationProvider:
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
         retry_max_delay_seconds: float = DEFAULT_RETRY_MAX_DELAY_SECONDS,
+        temperature: float = 0.2,
+        thinking_level: str = CARD_GENERATION_THINKING_LEVEL,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_value: Callable[[], float] = random.random,
     ) -> None:
@@ -87,6 +92,10 @@ class GeminiGenerationProvider:
             raise ValueError("Retry delays must be non-negative.")
         if retry_base_delay_seconds > retry_max_delay_seconds:
             raise ValueError("retry_base_delay_seconds must not exceed retry_max_delay_seconds.")
+        if not 0 <= temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2.")
+        if not thinking_level:
+            raise ValueError("thinking_level must be non-empty.")
         self.model = model
         self._api_key = api_key
         self._owns_client = client is None
@@ -94,6 +103,8 @@ class GeminiGenerationProvider:
         self._max_attempts = max_attempts
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._retry_max_delay_seconds = retry_max_delay_seconds
+        self._temperature = temperature
+        self._thinking_level = thinking_level
         self._sleep = sleep
         self._random_value = random_value
 
@@ -174,9 +185,9 @@ class GeminiGenerationProvider:
                 "systemInstruction": {"parts": [{"text": CARD_GENERATION_SYSTEM_PROMPT}]},
                 "contents": [{"role": "user", "parts": [{"text": request.userPrompt}]}],
                 "generationConfig": {
-                    "temperature": 0.2,
+                    "temperature": self._temperature,
                     "maxOutputTokens": CARD_GENERATION_MAX_OUTPUT_TOKENS,
-                    "thinkingConfig": {"thinkingLevel": CARD_GENERATION_THINKING_LEVEL},
+                    "thinkingConfig": {"thinkingLevel": self._thinking_level},
                     "responseMimeType": "application/json",
                     "responseJsonSchema": _card_schema(request),
                 },
@@ -221,6 +232,13 @@ class GeminiGenerationProvider:
             request_id=response.headers.get("x-request-id") or request.requestId,
             output=output,
             usage=usage,
+            provider_id=self.id,
+            model_id=self.model,
+            diagnostics=_success_retry_diagnostics(
+                attempt,
+                self._max_attempts,
+                retry_history,
+            ),
         )
 
     async def bari_chat(self, request: BariChatRequest, conversation_history: list[dict[str, str]]) -> BariChatResult:
@@ -259,7 +277,8 @@ class GeminiGenerationProvider:
                 "systemInstruction": {"parts": [{"text": BARI_CHAT_SYSTEM_PROMPT}]},
                 "contents": contents,
                 "generationConfig": {
-                    "temperature": 0.7,
+                    "temperature": self._temperature,
+                    "thinkingConfig": {"thinkingLevel": self._thinking_level},
                     "maxOutputTokens": 2048,
                 },
             },
@@ -292,11 +311,18 @@ class GeminiGenerationProvider:
 
         usage = payload.get("usageMetadata") or {}
         return BariChatResult(
-            request_id=response.headers.get("x-request-id") or "",
+            request_id=response.headers.get("x-request-id") or f"bari-{uuid4()}",
             message=message_text,
             usage=ProviderUsage(
                 inputTokens=_non_negative_int(usage.get("promptTokenCount")),
                 outputTokens=_non_negative_int(usage.get("candidatesTokenCount")),
+            ),
+            provider_id=self.id,
+            model_id=self.model,
+            diagnostics=_success_retry_diagnostics(
+                attempt,
+                self._max_attempts,
+                retry_history,
             ),
         )
 
@@ -392,6 +418,22 @@ def _add_retry_diagnostics(
     diagnostics["retriesExhausted"] = exhausted
     if retry_history:
         diagnostics["retryHistory"] = retry_history
+
+
+def _success_retry_diagnostics(
+    attempt: int,
+    max_attempts: int,
+    retry_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "attempt": attempt,
+        "maxAttempts": max_attempts,
+        "retryCount": len(retry_history),
+        "retriesExhausted": False,
+    }
+    if retry_history:
+        diagnostics["retryHistory"] = retry_history
+    return diagnostics
 
 
 def _response_retry_record(response: httpx.Response, attempt: int, delay: float) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 import type { SourceSpan } from '@/ai/sourceSpan';
 import type { ParsedSegment } from './types';
+import type { ConceptTarget } from './concepts';
 import type { ExamGoal, ReviewStyle, StudyDifficulty } from '@/domain/types';
 
 export type MedicalCardType =
@@ -16,6 +17,8 @@ export type MedicalCardType =
   | 'classification';
 
 export type ExtractiveDraft = {
+  targetId?: string;
+  frontStyle?: 'term' | 'question';
   segmentId: string;
   locator: string;
   cardType: MedicalCardType;
@@ -275,6 +278,111 @@ export function createExtractiveDrafts(
   }
 
   return drafts;
+}
+
+export function createTargetedExtractiveDrafts(
+  segments: ParsedSegment[],
+  targets: ConceptTarget[],
+  preferences?: DraftGenerationPreferences,
+): ExtractiveDraft[] {
+  const byId = new Map(segments.map((segment) => [segment.id, segment]));
+  const anchors = targets.flatMap((target): ExtractiveDraft[] => {
+    const segment = target.segmentIds.map((id) => byId.get(id)).find(Boolean);
+    if (!segment) return [];
+    const evidenceText = targetEvidence(segment.text, target.term);
+    const directAnswer = target.detail.slice(0, 700).trim();
+    if (!directAnswer || !evidenceText) return [];
+    const qualityScore = scoreTargetAnchor(target, segment, directAnswer, evidenceText);
+    if (qualityScore < MIN_QUALITY_SCORE) return [];
+    return [{
+      targetId: target.id,
+      frontStyle: target.frontStyle,
+      segmentId: segment.id,
+      locator: segment.locator,
+      cardType: targetCardType(target),
+      learningObjective: `Recall ${target.term}.`,
+      qualityScore,
+      qualityNotes: `Automated check score ${Math.round(qualityScore * 100)}% · deterministic target anchor · source ownership and evidence coverage checked.`,
+      question: targetQuestion(target),
+      answer: `Answer: ${directAnswer}`,
+      evidenceText,
+    }];
+  });
+  const anchorKeys = new Set(anchors.map((draft) => normalizeKey(draft.answer)));
+  const detailCards = createExtractiveDrafts(segments, preferences)
+    .filter((draft) => !anchorKeys.has(normalizeKey(draft.answer)));
+  return [...anchors, ...detailCards].slice(0, MAX_DRAFTS);
+}
+
+function scoreTargetAnchor(
+  target: ConceptTarget,
+  segment: ParsedSegment,
+  answer: string,
+  evidenceText: string,
+) {
+  if (!balancedDelimiters(target.term) || !balancedDelimiters(answer)) return 0;
+  if (/\b(?:and|or|with|without|when|unless|usually|including|such as|because|than|of|to|for|the|a|an)$/i.test(target.term)) return 0;
+  if (target.term.endsWith('?') && target.targetType !== 'myth') return 0;
+
+  const normalizedTerm = normalizeKey(target.term.replace(/\?$/, ''));
+  const normalizedSection = normalizeKey(segment.sectionPath);
+  const normalizedEvidence = normalizeKey(evidenceText);
+  const dedicatedSection = normalizedSection.includes(normalizedTerm)
+    || normalizedTerm.includes(normalizedSection);
+  const termSupported = contentWords(normalizedTerm).some((word) => normalizedEvidence.includes(word));
+  const coverage = sourceEvidenceCoverage(answer, evidenceText);
+  let score = 0.66;
+  if (dedicatedSection) score += 0.14;
+  if (termSupported) score += 0.07;
+  if (target.targetType === 'myth' || target.targetType === 'safety') score += 0.08;
+  if (answer.length >= 20 && answer.length <= 700) score += 0.04;
+  if (coverage >= 0.75) score += 0.08;
+  else if (coverage >= 0.55) score += 0.03;
+  else score -= 0.16;
+  if (GENERIC_QUESTION_PATTERN.test(target.term)) score -= 0.35;
+  return clampScore(score);
+}
+
+function balancedDelimiters(value: string) {
+  return [['(', ')'], ['[', ']'], ['{', '}']].every(([open, close]) => {
+    let balance = 0;
+    for (const character of value) {
+      if (character === open) balance += 1;
+      if (character === close) balance -= 1;
+      if (balance < 0) return false;
+    }
+    return balance === 0;
+  });
+}
+
+function contentWords(value: string) {
+  return value.split(/\s+/).filter((word) => word.length >= 4);
+}
+
+function targetQuestion(target: ConceptTarget) {
+  if (target.frontStyle === 'term') return target.term;
+  const cannot = target.term.match(/^you can(?:not|'t)\s+(.+)$/i);
+  if (cannot) return `Can you ${cannot[1].replace(/[.!?]+$/, '')}?`;
+  const negative = target.detail.match(/^(.{3,100}?)\s+(?:do|does) not\s+(.{5,180})[.!]?$/i);
+  if (negative) return `Does ${negative[1].trim().replace(/,?\s+such as\s+.+$/i, '')} ${negative[2].trim().replace(/[.!?]+$/, '')}?`;
+  return `What should you recall about ${target.term}?`;
+}
+
+function targetCardType(target: ConceptTarget): MedicalCardType {
+  if (target.targetType === 'safety') return 'contraindication';
+  if (target.targetType === 'myth') return 'clinical-finding';
+  if (target.emphasis === 'mechanism') return 'mechanism';
+  if (target.emphasis === 'clinical') return 'clinical-finding';
+  if (target.emphasis === 'treatment') return 'treatment-reasoning';
+  return 'definition';
+}
+
+function targetEvidence(text: string, term: string) {
+  if (text.length <= MAX_EVIDENCE_CHARS) return text;
+  const index = text.toLowerCase().indexOf(term.toLowerCase());
+  if (index < 0) return text.slice(0, MAX_EVIDENCE_CHARS);
+  const start = Math.max(0, index - 80);
+  return text.slice(start, Math.min(text.length, start + MAX_EVIDENCE_CHARS));
 }
 
 function createSegmentDrafts(segment: ParsedSegment, preferences?: DraftGenerationPreferences): ScoredDraft[] {
@@ -936,7 +1044,7 @@ function hasLongCopiedRun(answer: string, evidence: string) {
 function describeQuality(cardType: MedicalCardType, qualityScore: number, evidenceCoverage: number) {
   const typeLabel = cardType.replace(/-/g, ' ');
   const gate = qualityScore >= AUTO_PUBLISH_QUALITY_SCORE ? 'passes automatic publishing' : 'needs source attention';
-  return `${Math.round(qualityScore * 100)}% quality · ${Math.round(evidenceCoverage * 100)}% answer-to-evidence coverage · ${typeLabel} · ${gate}.`;
+  return `Automated check score ${Math.round(qualityScore * 100)}% · ${Math.round(evidenceCoverage * 100)}% answer-to-evidence coverage · ${typeLabel} · ${gate}.`;
 }
 
 function sourceEvidenceCoverage(answer: string, evidence: string) {

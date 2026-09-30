@@ -6,6 +6,17 @@ const makeSegment = (id: string, sectionPath: string, text: string, locator = 'P
 });
 
 describe('extractConceptTargets', () => {
+  it('rejects malformed table fragments and source-authored consideration questions', () => {
+    const targets = extractConceptTargets([
+      makeSegment(
+        'noise',
+        'Methods',
+        '• Are there non-contraceptive benefits of a method?\nMinor side effects (usually: headaches and nausea.\n• Nexplanon',
+      ),
+    ]);
+
+    expect(targets.map((target) => target.term)).toEqual([]);
+  });
   it('extracts definitions as concept targets', () => {
     const segments = [
       makeSegment('seg-1', 'Pharmacology', 'Metformin is a biguanide that reduces hepatic glucose production and improves insulin sensitivity in type 2 diabetes.', 'Page 1'),
@@ -54,6 +65,19 @@ describe('extractConceptTargets', () => {
     expect(delirium!.segmentIds).toContain('seg-2');
   });
 
+  it('keeps related concepts when the child term adds meaningful clinical information', () => {
+    const segments = [makeSegment(
+      'seg-1',
+      'Endocrinology',
+      'Insulin is a hormone that regulates blood glucose. Insulin resistance is reduced responsiveness to insulin in target tissues.',
+      'Page 1',
+    )];
+
+    const terms = extractConceptTargets(segments).map((concept) => concept.term.toLowerCase());
+    expect(terms).toContain('insulin');
+    expect(terms).toContain('insulin resistance');
+  });
+
   it('returns empty when no useful concepts are found', () => {
     const segments = [makeSegment('seg-1', 'Intro', 'This section provides an overview.', 'Page 1')];
     const concepts = extractConceptTargets(segments);
@@ -70,6 +94,9 @@ describe('selectSegmentsForConcept', () => {
     emphasis: 'treatment' as const,
     segmentIds: ['seg-1'],
     locator: 'Page 1',
+    targetType: 'named-concept' as const,
+    frontStyle: 'term' as const,
+    primary: true as const,
   };
   const segments: ParsedSegment[] = [
     makeSegment('seg-1', 'Pharmacology', 'Metformin reduces hepatic glucose production and improves insulin sensitivity.', 'Page 1'),

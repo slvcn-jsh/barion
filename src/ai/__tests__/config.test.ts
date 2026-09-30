@@ -1,4 +1,7 @@
-import { parsePublicGatewayConfig, readExpoPublicGatewayConfig } from '@/ai/config';
+import {
+  parseExpoPublicGatewayEnvironment,
+  parsePublicGatewayConfig,
+} from '@/ai/config';
 import { BarionAIError } from '@/ai/errors';
 
 describe('parsePublicGatewayConfig', () => {
@@ -14,39 +17,40 @@ describe('parsePublicGatewayConfig', () => {
   });
 
   it('reads a bounded public gateway timeout from Expo environment metadata', () => {
-    const previous = {
-      url: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL,
-      model: process.env.EXPO_PUBLIC_BARION_AI_MODEL,
-      timeout: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS,
+    expect(parseExpoPublicGatewayEnvironment({
+      gatewayUrl: 'http://127.0.0.1:8790',
+      model: 'medical-cards-v1',
+      timeoutMs: '90000',
+    })?.timeoutMs).toBe(90_000);
+  });
+
+  it('keeps static gateway authorization development-only', () => {
+    const env = {
+      gatewayUrl: 'https://ai.barion.example',
+      model: 'medical-cards-v1',
+      accessToken: 'development-only-token',
     };
-    process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL = 'http://127.0.0.1:8790';
-    process.env.EXPO_PUBLIC_BARION_AI_MODEL = 'medical-cards-v1';
-    process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS = '90000';
-    try {
-      expect(readExpoPublicGatewayConfig()?.timeoutMs).toBe(90_000);
-    } finally {
-      restoreEnv('EXPO_PUBLIC_BARION_AI_GATEWAY_URL', previous.url);
-      restoreEnv('EXPO_PUBLIC_BARION_AI_MODEL', previous.model);
-      restoreEnv('EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS', previous.timeout);
-    }
+    expect(parseExpoPublicGatewayEnvironment({
+      ...env,
+      nodeEnv: 'development',
+    })?.accessToken).toBe('development-only-token');
+
+    expect(parseExpoPublicGatewayEnvironment({
+      ...env,
+      nodeEnv: 'production',
+    })).toEqual({
+      gatewayUrl: 'https://ai.barion.example',
+      model: 'medical-cards-v1',
+      timeoutMs: 120_000,
+    });
   });
 
   it('rejects malformed public gateway timeout metadata', () => {
-    const previous = {
-      url: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL,
-      model: process.env.EXPO_PUBLIC_BARION_AI_MODEL,
-      timeout: process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS,
-    };
-    process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL = 'http://127.0.0.1:8790';
-    process.env.EXPO_PUBLIC_BARION_AI_MODEL = 'medical-cards-v1';
-    process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS = 'not-a-number';
-    try {
-      expect(() => readExpoPublicGatewayConfig()).toThrow('AI gateway timeout must be between');
-    } finally {
-      restoreEnv('EXPO_PUBLIC_BARION_AI_GATEWAY_URL', previous.url);
-      restoreEnv('EXPO_PUBLIC_BARION_AI_MODEL', previous.model);
-      restoreEnv('EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS', previous.timeout);
-    }
+    expect(() => parseExpoPublicGatewayEnvironment({
+      gatewayUrl: 'http://127.0.0.1:8790',
+      model: 'medical-cards-v1',
+      timeoutMs: 'not-a-number',
+    })).toThrow('AI gateway timeout must be between');
   });
 
   it.each(['apiKey', 'secret', 'providerToken', 'authorization'])('rejects provider credential field %s', (key) => {
@@ -78,25 +82,9 @@ describe('parsePublicGatewayConfig', () => {
   });
 
   it('returns null when optional gateway URL is absent, even if model metadata remains', () => {
-    const url = process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL;
-    const model = process.env.EXPO_PUBLIC_BARION_AI_MODEL;
-    const accessToken = process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN;
-    process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL = '';
-    process.env.EXPO_PUBLIC_BARION_AI_MODEL = 'medical-cards-v1';
-    try {
-      expect(readExpoPublicGatewayConfig()).toBeNull();
-    } finally {
-      if (url !== undefined) process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL = url;
-      else delete process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_URL;
-      if (model !== undefined) process.env.EXPO_PUBLIC_BARION_AI_MODEL = model;
-      else delete process.env.EXPO_PUBLIC_BARION_AI_MODEL;
-      if (accessToken !== undefined) process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN = accessToken;
-      else delete process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN;
-    }
+    expect(parseExpoPublicGatewayEnvironment({
+      gatewayUrl: '',
+      model: 'medical-cards-v1',
+    })).toBeNull();
   });
 });
-
-function restoreEnv(name: string, value: string | undefined) {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}

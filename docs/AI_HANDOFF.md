@@ -75,7 +75,7 @@ Barion is an offline-first medical and health-science study app. It imports lear
 
 - `AGENTS.md` — operating rules; Expo work requires exact v57 docs.
 - `app/` — Expo Router screens/shell.
-- `src/storage/database.ts` — schema v20, migrations/repairs, indexes, FTS.
+- `src/storage/database.ts` — schema v26, migrations/repairs, indexes, FTS, generation purpose/key identity.
 - `src/storage/repository.ts` — import, generation persistence, approval, study/review workflows.
 - `src/ingestion/` — readers, segmentation, extractive drafts, guides.
 - `src/ai/` — provider/config, prompts, validation, spans, evaluation, policy, sanitization, quality.
@@ -103,7 +103,7 @@ Barion is an offline-first medical and health-science study app. It imports lear
 ## 9. AI / PROVIDER / GATEWAY ARCHITECTURE
 
 - Path: `generateDraftsForSource` -> `createGatewayCardGenerationProvider` -> `POST /v1/card-generation` -> `GenerationOrchestrator` -> `GeminiGenerationProvider` -> gateway validation -> client revalidation/persistence.
-- Client abstraction: `CardGenerationProvider`; current server adapter Gemini only. Defaults are provider `gemini`, model `gemini-2.5-flash`. Canonical local benchmark used `gemini-3.5-flash`; that does not redefine production default.
+- Client abstraction: `CardGenerationProvider`; current server adapter Gemini only. Default baseline is logical `gemini-3.8-flash/base` / physical `gemini-3.8-flash`. Canonical older benchmark runs retain their recorded model identity.
 - Auth: local static bearer or Supabase RS256/ES256 JWT/JWKS. Client retries one 401 after forced session refresh. Refresh tokens never reach gateway.
 - Provider retries: default 4 total attempts for 429/500/502/503/504, timeout, and transport errors; full-jitter exponential delay capped at 16 seconds by default; bounded server retry hints. Auth/invalid requests are not retried.
 - Gateway defaults: 300,000 request bytes, 180,000 input characters, 1–100 candidates. Gemini uses low thinking and 32,768 combined thinking/output tokens.
@@ -160,20 +160,16 @@ Supported by canonical local artifacts only:
 Run against current product-code state:
 
 - `npm run typecheck` — pass.
-- `npm test -- --runInBand` — 28 suites passed, 144 tests passed.
-- `npm run test:e2e:ai-fallback` — six scenarios passed: one remote gateway path plus malformed output, provider failure, timeout, oversized request, and rate-limit fallback paths.
+- `node node_modules/jest/bin/jest.js --runInBand` — 45 suites passed, 254 tests passed.
+- Last completed focused Playwright proof — three scenarios passed: local usability while remote work is pending, HTTP 429 degradation, and 60-candidate persistence without nested transaction.
 - `git diff --check` — pass.
-
-Previously validated on current `HEAD`; Python code is unchanged by this follow-up:
-
-- `python -m pytest services/card_evaluation/tests services/card_benchmark/tests -q` — 102 passed.
-- `python -m pytest services/ai_gateway/tests -q` — 46 passed.
-- `python -m compileall -q services` — pass.
+- Full Python service suite — 207 tests passed.
+- `python -m compileall -q services` — source compilation passes; inaccessible pytest-cache directory warning only.
 
 ### FAILING
 
 - No known TypeScript or Jest failures.
-- Playwright completed all six tests, but its Windows web-server teardown did not exit after completion and required interruption. Ports `8091` and `8092` were no longer listening afterward; test artifacts record a passed run.
+- Current Playwright invocation may stall before output or during teardown in managed Windows shell. No product assertion failure is known.
 
 ### NOT RUN
 
@@ -197,9 +193,9 @@ Previously validated on current `HEAD`; Python code is unchanged by this follow-
 ## 16. GIT STATE
 
 - Branch: `master`.
-- HEAD: `160e08e1516844e65d472194d60c3f7247cda73a` (`fix: harden AI evaluation and gateway correctness`), matching `origin/master`.
-- Working tree: **not clean**. Current changes are generation provenance/resilience, schema v20 repair, source UX, backup coverage, mocked browser E2E, tests, and documentation.
-- Staged files: none. No commit created.
+- HEAD: `8b44d54` on `master`, matching `origin/master` before this run.
+- Working tree: **not clean**. Current changes include generation reliability, schema v26, model/evaluation policy, dataset governance, UI, gateway, tests, and documentation.
+- Large pre-existing staged set exists; no commit created.
 - Modified groups: source detail UI; TypeScript generation contracts/config/quality; SQLite schema/repository/backup; AI tests; Playwright fallback tests; local full-stack startup; environment/deployment/handoff docs.
 - Untracked intended source/tests: `scripts/start-development.js`, `src/ai/generationExperience.ts`, `src/ai/__tests__/generationExperience.test.ts`, and `src/storage/__tests__/generationProvenance.test.ts`.
 - Untracked local-only directories: `.agents/`, `.codex/`, and `.tmp/`; do not add without deliberate review.
@@ -236,13 +232,13 @@ Older testing/setup/completion/telemetry notes may help historically but contain
 
 ## 19. NEXT RECOMMENDED IMPLEMENTATION TASK
 
-**Objective:** complete remaining Workstream B generation completeness with bounded batching, continuation, and durable checkpoints.
+**Objective:** curate authorized card-generation gold records and run frozen baseline prompt/retrieval comparisons before any SFT experiment.
 
-**Why next:** current follow-up makes success, fallback, failure, and restart state truthful, but generation still uses one rigid remote request and cannot resume partial progress.
+**Why next:** runtime reliability and bounded batching are implemented; model optimization now lacks human-reviewed training/evaluation data and production cost/reliability evidence.
 
-**Expected scope:** reuse benchmark-proven batching/continuation primitives for bounded batches, stable IDs, persisted checkpoints, duplicate-safe merge, explicit completion states, and concept-aware gap continuation. Do not clone benchmark reporting infrastructure into production.
+**Expected scope:** use `datasets/bari-cardgen` contracts and existing benchmark. Keep user uploads inference-only unless consent, rights, privacy, and review gates all pass. Compare baseline prompt, optimized prompt, few-shot, and retrieval interventions one at a time.
 
-**Required validation:** gateway/provider retry and partial-success tests, checkpoint/resume tests, duplicate-safe persistence tests, mocked interrupted-generation E2E, TypeScript tests/typecheck, Python compile checks, and `git diff --check`.
+**Required validation:** frozen split isolation, immutable evaluation envelope, grounding/safety vetoes, latency/token/cost/reliability metrics, TypeScript/Python regression tests, and `git diff --check`.
 
 ## 20. CODEX TRANSITION NOTES
 

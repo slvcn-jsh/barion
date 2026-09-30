@@ -21,6 +21,7 @@ Versioned source-fidelity, concept-coverage, source-constrained semantic matchin
 - Phase-2 coverage matching remains deterministic lexical recall with numeric agreement and optional segment alignment. Ambiguous layout remains uncertain.
 - Phase-3 semantic matching adds explicit medical-term equivalences, proposition recall, contradiction vetoes, numeric agreement, versioned calibration fixtures, and source-constrained cross-system pairing. It is pair selection, not medical verification.
 - Expert comparison uses seeded A/B orientation with origin removed. GPT-5.6 Sol High scores cards independently, compares qualified source-concept matches, and performs selective same-model verification. Self-check is never represented as independent reviewer evidence.
+- Human blind review uses rubric version 2: accuracy, source faithfulness, atomicity, clarity, answer specificity, and learning value. Production claims require both a medical-student reviewer and a clinician, medical educator, or subject-matter expert; reviewer IDs remain pseudonymous.
 - Structural compliance applies only to production-contract fields. Expert pedagogy uses visible 0-4 dimension scores; source and safety gates remain authoritative.
 - Deterministic claim evaluation separates citation quality from citation, segment, and document support. Ambiguous evidence remains `uncertain`; lexical overlap is diagnostic metadata only.
 - Normal CLI execution runs versioned known-regression and semantic-calibration fixtures, then writes canonical claim-level JSONL and blind-review inputs.
@@ -56,14 +57,73 @@ python -m services.card_benchmark --allow-remote --generation-batches 4 `
 # Tests
 python -m pytest services/card_benchmark/tests -q
 
+# Run frozen evaluator calibration. Report is privacy-safe by default: source and card text are hashed.
+python -m services.card_benchmark.evaluator_calibration `
+  --output tmp/evaluator-calibration-current.json
+
+# Local diagnosis only. Explicitly include fixture text when reviewing evaluator mistakes.
+python -m services.card_benchmark.evaluator_calibration `
+  --output tmp/evaluator-calibration-with-content.json --include-content
+
+# Paid diagnostic only: compare deterministic grounding with one bounded,
+# source-only Gemini semantic-verifier batch. This never changes publication policy.
+python -m services.card_benchmark.semantic_verifier_experiment `
+  --output tmp/semantic-verifier-experiment-current.json `
+  --model gemini-3.8-flash
+
+# Create blinded label packet. Each reviewer works from a separate copy.
+python -m services.card_benchmark.evaluator_label_review prepare `
+  --fixtures services/card_benchmark/fixtures/evaluator_calibration.json `
+  --output tmp/evaluator-label-review.json
+
+# Lock consensus into a new fixture; original is never overwritten.
+python -m services.card_benchmark.evaluator_label_review lock `
+  --fixtures services/card_benchmark/fixtures/evaluator_calibration.json `
+  --review tmp/reviewer-med-student.json `
+  --review tmp/reviewer-clinician.json `
+  --output tmp/evaluator-calibration-reviewed.json
+
+# Convert a hash-verified immutable generation run into an unlabeled review fixture.
+# Governance JSON must explicitly authorize evaluation, approve source rights,
+# classify the source as non-sensitive, and mark it inference-only.
+python -m services.card_benchmark.evaluator_artifact_fixture `
+  --run tmp/card-benchmark/runs/<run-id> `
+  --source tmp/card-benchmark/PDF_INPUT.pdf `
+  --source-title "Exact title used by the benchmark run" `
+  --governance tmp/evaluator-source-governance.json `
+  --output tmp/evaluator-model-output-unlabeled.json
+
+# Register the authorized multi-format benchmark pack without copying source or gold content.
+# The writer verifies manifest paths, source/gold ID coverage, source hashes, and obvious
+# secret/PII patterns, then refuses to overwrite an existing registry.
+python -m services.card_benchmark.authorized_source_registry `
+  --pack tmp/barion_quizlet_benchmark_v1 `
+  --authorization tmp/barion_quizlet_benchmark_v1/source-use-authorization.json `
+  --output datasets/bari-cardgen/registries/barion-quizlet-benchmark-v1.json
+
+# Verify registered bytes and prepare every input through the current extraction and
+# segmentation contract. Output is content-free and makes no provider calls.
+python -m services.card_benchmark.authorized_pack_preflight `
+  --pack tmp/barion_quizlet_benchmark_v1 `
+  --registry datasets/bari-cardgen/registries/barion-quizlet-benchmark-v1.json `
+  --output tmp/barion_quizlet_benchmark_v1/preflight-v1.json
+
 # Create immutable Phase 3 expert-evaluation child run from existing generation run
 python -m services.card_benchmark.phase3_run --parent C:\\absolute\\path\\generation-run --output C:\\absolute\\path\\evaluation-runs
-```
 
 # Re-evaluate immutable Phase 3 cards with deterministic UTF-16 source spans; no generation call.
 python -m services.card_benchmark.phase4_run `
   --parent C:\\absolute\\path\\runs\\2989a802173cfc05e313a135 `
   --output C:\\absolute\\path\\phase4-evaluation-runs
+
+# Create immutable fail-closed model-promotion evidence from comparable evaluation envelopes.
+# Threshold JSON is mandatory; repository provides no implicit production thresholds.
+python -m services.card_benchmark.promotion_run `
+  --baseline C:\\absolute\\path\\baseline\\evaluation_run.json `
+  --candidate C:\\absolute\\path\\candidate\\evaluation_run.json `
+  --thresholds C:\\absolute\\path\\approved-promotion-thresholds.json `
+  --output C:\\absolute\\path\\promotion-runs
+```
 
 
 Custom paths:
@@ -91,8 +151,23 @@ python -m services.card_benchmark `
 - `coverage_map.json`: Barion/Quizlet coverage maps, distributions, duplicates, and concept-to-card links
 - `matches.json`: source-constrained semantic card pairs with component scores and matcher version
 - `semantic_calibration.json`: versioned fixture outcomes, including false-positive/false-negative cases
+- evaluator calibration report: candidate/evidence trace, expected and actual labels, disposition accuracy, false acceptance/rejection counts, and hashed content by default
 - `blind_review.csv`: system-neutral paired review input
 - `blind_review_protocol.json`: rubric, reviewer instructions, and predeclared acceptance gates
 - `private/blind_review_key.json`: concealed A/B system identities; reveal only after reviews lock
 
 Canonical comparative conclusions use all legitimate shared critical/high concepts plus representative medium concepts. Thirty pairs apply only when at least 30 qualified shared concepts exist. Source, numeric, contradiction, and safety gates override expert pedagogy. Selective SOL verification reports self-consistency, revision, and uncertainty—not independent-rater agreement.
+
+Completed rubric-v2 reviews also report `humanAcceptanceRate`. They do not infer `humanEditRate`; edit evidence must come from an authorized learner study or product feedback workflow.
+
+Current project-authored evaluator calibration is diagnostic, not a production medical benchmark: 10 cases produce 0.9 label accuracy and 0.9 disposition accuracy. Deterministic document-mechanics validation removes the known false acceptance. AI-only promotion remains blocked while one legitimate semantic paraphrase is falsely rejected.
+
+The semantic-verifier experiment is isolated from production publication. It sends only selected evaluation fixtures, uses one bounded structured-output request with no automatic retry, records content-free provider/token/latency metadata, and reports raw semantic plus progressive hybrid outcomes. Deterministic contradiction, ambiguous source provenance, and bad-learning-item decisions remain vetoes; semantic verification can only reconsider deterministic `UNSUPPORTED` outcomes. Labels without locked independent medical review are always `DIAGNOSTIC_ONLY` and cannot authorize promotion.
+
+Evaluator-label review packets intentionally omit current gold labels, rationales, and expected dispositions. Locking requires complete case-level consensus from unique pseudonymous reviewers, including one medical student and one clinician, medical educator, or subject-matter expert. Review disagreement requires adjudication; tooling never silently averages or overwrites labels.
+
+Real model outputs enter review only through `evaluator_artifact_fixture`. It verifies source, normalized-deck, and reconstructed-segment hashes against the immutable run; requires every evidence quote to resolve uniquely in its declared segment; and emits no gold labels. Model-output fixtures fail closed unless a separate governance declaration records approved evaluation use and rights, no sensitive data, and `trainingEligibility: inference-only`. Source-level training authorization is recorded separately and never upgrades generated cards into training truth.
+
+Current owner-authorized evidence includes ten sources in `tmp/barion_quizlet_benchmark_v1` and the psychiatric-nursing source used by run `2989a802173cfc05e313a135`. Content-free registries live under `datasets/bari-cardgen/registries/`; raw sources, hidden gold files, unlabeled fixtures, and reviewer packets remain ignored local artifacts. The current 50-card fixture and blinded packet are prepared, but labels remain absent until independent medical-student and clinical/education review reaches complete consensus.
+
+The authorized pack preflight verifies registry hashes before extraction, never reads `evaluation/`, and emits no source text. Current result: 10/10 sources generation-ready with zero blockers. PDF table and multi-column warnings remain explicit diagnostic inputs for later per-source generation scoring.

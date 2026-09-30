@@ -15,12 +15,16 @@ export type CardGenerationInput = {
   segments: SourceContext[];
   maxCandidates: number;
   conceptTargets?: Array<{
+    id: string;
     term: string;
     detail: string;
     importance: 'critical' | 'high' | 'standard';
     emphasis: 'safety' | 'treatment' | 'clinical' | 'mechanism' | 'definition' | 'overview';
     segmentIds: string[];
     locator: string;
+    targetType: 'named-concept' | 'section' | 'myth' | 'safety';
+    frontStyle: 'term' | 'question';
+    primary: true;
   }>;
 };
 
@@ -54,6 +58,10 @@ export interface CardGenerationProvider {
 }
 
 export type GroundedCardCandidate = {
+  targetId?: string;
+  frontStyle?: 'term' | 'question';
+  qualityScore?: number;
+  qualityNotes?: string;
   segmentId: string;
   locator: string;
   cardType: string;
@@ -110,6 +118,7 @@ export interface AITelemetrySink {
 
 export type GenerationMode =
   | 'REMOTE_AI'
+  | 'LOCAL_BASELINE'
   | 'LOCAL_FALLBACK'
   | 'PARTIAL_REMOTE_WITH_FALLBACK'
   | 'FAILED';
@@ -128,9 +137,15 @@ export type BariCitation = {
   text?: string;
 };
 
+export type BariChatHistoryMessage = {
+  role: 'user' | 'bari' | 'model' | 'assistant';
+  text: string;
+};
+
 export type BariChatRequestPayload = {
   conversationId?: string;
   message: string;
+  history?: BariChatHistoryMessage[];
   mode?: 'source-strict' | 'explain';
   sourceScope?: Record<string, unknown>;
   courseId?: string;

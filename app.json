@@ -21,7 +21,8 @@
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./app/image/BARIONLOGO.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.barion.medstudy"
     },
     "web": {
       "favicon": "./app/image/BARIONLOGO.png"

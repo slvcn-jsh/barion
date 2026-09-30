@@ -35,10 +35,33 @@ const cardSeparators: { value: CardImportCardSeparator; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const sampleImport = [
-  'Loop diuretics potassium risk\tLoop diuretics can increase potassium loss and may contribute to hypokalemia.',
-  'The sinoatrial node is the heart rhythm {{c1::pacemaker}} and starts impulses in the {{c2::right atrium}}.\tAnatomy recall context.',
-].join('\n');
+function getFieldSeparatorChar(sep: CardImportFieldSeparator, custom: string) {
+  if (sep === 'comma') return ',';
+  if (sep === 'semicolon') return ';';
+  if (sep === 'pipe') return '|';
+  if (sep === 'custom') return custom || '\t';
+  return '\t';
+}
+
+function getCardSeparatorChar(sep: CardImportCardSeparator, custom: string) {
+  if (sep === 'blank-line') return '\n\n';
+  if (sep === 'semicolon') return '; ';
+  if (sep === 'custom') return custom || '\n';
+  return '\n';
+}
+
+function buildDynamicSampleImport(
+  fieldSep: CardImportFieldSeparator,
+  customField: string,
+  cardSep: CardImportCardSeparator,
+  customCard: string,
+) {
+  const f = getFieldSeparatorChar(fieldSep, customField);
+  const c = getCardSeparatorChar(cardSep, customCard);
+  const row1 = `Loop diuretics potassium risk${f}Loop diuretics can increase potassium loss and contribute to hypokalemia.`;
+  const row2 = `Sinoatrial node function${f}The SA node acts as the primary physiological pacemaker of the heart.`;
+  return `${row1}${c}${row2}`;
+}
 
 export default function NewCardScreen() {
   const params = useLocalSearchParams<{ deckId?: string; mode?: string }>();
@@ -55,6 +78,8 @@ export default function NewCardScreen() {
   const [cardSeparator, setCardSeparator] = useState<CardImportCardSeparator>('newline');
   const [customCardSeparator, setCustomCardSeparator] = useState('');
   const [firstRowIsHeader, setFirstRowIsHeader] = useState(false);
+  const [deckFilter, setDeckFilter] = useState('');
+  const [addedCount, setAddedCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -63,6 +88,23 @@ export default function NewCardScreen() {
     () => decks.find((deck) => deck.id === selectedDeckId) ?? decks[0],
     [decks, selectedDeckId],
   );
+
+  const filteredDecks = useMemo(() => {
+    const q = deckFilter.trim().toLowerCase();
+    if (!q) return decks;
+    return decks.filter((deck) => deck.title.toLowerCase().includes(q));
+  }, [deckFilter, decks]);
+
+  const dynamicSample = useMemo(
+    () => buildDynamicSampleImport(fieldSeparator, customFieldSeparator, cardSeparator, customCardSeparator),
+    [cardSeparator, customCardSeparator, customFieldSeparator, fieldSeparator],
+  );
+
+  const placeholderExample = useMemo(() => {
+    const f = getFieldSeparatorChar(fieldSeparator, customFieldSeparator);
+    const c = getCardSeparatorChar(cardSeparator, customCardSeparator);
+    return `Front${f}Back${c}Question${f}Answer`;
+  }, [cardSeparator, customCardSeparator, customFieldSeparator, fieldSeparator]);
 
   const previewRows = useMemo(
     () =>
@@ -105,7 +147,7 @@ export default function NewCardScreen() {
     }, []),
   );
 
-  async function saveSingle() {
+  async function saveSingle(andAddAnother = false) {
     if (!selectedDeck) {
       Alert.alert('No deck available', 'Create a deck before adding cards.');
       return;
@@ -142,7 +184,13 @@ export default function NewCardScreen() {
           cardType,
         });
       }
-      router.replace({ pathname: '/deck/[id]', params: { id: selectedDeck.id } });
+      if (andAddAnother) {
+        setPrompt('');
+        setAnswer('');
+        setAddedCount((c) => c + 1);
+      } else {
+        router.replace({ pathname: '/deck/[id]', params: { id: selectedDeck.id } });
+      }
     } catch (error) {
       Alert.alert('Unable to save card', error instanceof Error ? error.message : 'Please try again.');
     } finally {
@@ -224,8 +272,17 @@ export default function NewCardScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Deck</Text>
+        {decks.length > 5 ? (
+          <TextInput
+            placeholder="Search decks…"
+            placeholderTextColor={colors.muted}
+            style={styles.deckSearchInput}
+            value={deckFilter}
+            onChangeText={setDeckFilter}
+          />
+        ) : null}
         <View style={styles.deckList}>
-          {decks.map((deck) => (
+          {filteredDecks.map((deck) => (
             <Pressable
               key={deck.id}
               style={[styles.deckChoice, selectedDeck?.id === deck.id && styles.deckChoiceActive]}
@@ -283,7 +340,17 @@ export default function NewCardScreen() {
             </View>
           ) : null}
 
-          <AppButton disabled={saving} label={saving ? 'Saving' : 'Save card'} icon="save-outline" onPress={() => void saveSingle()} />
+          {addedCount > 0 ? (
+            <View style={styles.notice}>
+              <Ionicons name="checkmark-circle" size={18} color={colors.green} />
+              <Text style={styles.noticeText}>{addedCount} card{addedCount === 1 ? '' : 's'} added to {selectedDeck?.title}. Ready for next card.</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.actionRow}>
+            <AppButton disabled={saving} label={saving ? 'Saving…' : 'Save and add another'} variant="secondary" icon="add-circle-outline" onPress={() => void saveSingle(true)} />
+            <AppButton disabled={saving} label={saving ? 'Saving…' : 'Save & finish'} icon="save-outline" onPress={() => void saveSingle(false)} />
+          </View>
         </View>
       ) : (
         <View style={styles.section}>
@@ -294,7 +361,7 @@ export default function NewCardScreen() {
             </View>
             <View style={styles.actionRow}>
               <AppButton disabled={picking} icon="document-attach-outline" label={picking ? 'Reading' : 'Choose file'} variant="secondary" onPress={() => void pickImportFile()} />
-              <AppButton icon="sparkles-outline" label="Use sample" variant="quiet" onPress={() => setImportText(sampleImport)} />
+              <AppButton icon="sparkles-outline" label="Use sample" variant="quiet" onPress={() => setImportText(dynamicSample)} />
             </View>
           </View>
 
@@ -302,7 +369,7 @@ export default function NewCardScreen() {
             <Text style={styles.label}>Rows</Text>
             <TextInput
               multiline
-              placeholder={'Front\tBack\n{{c1::Hidden term}} in context\tExtra note'}
+              placeholder={placeholderExample}
               placeholderTextColor={colors.muted}
               style={[styles.input, styles.importInput]}
               value={importText}
@@ -449,6 +516,7 @@ const styles = StyleSheet.create({
   deckChoiceText: { color: colors.ink, fontFamily: fonts.bold, fontSize: 13 },
   deckChoiceTextActive: { color: colors.surface },
   deckList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  deckSearchInput: { backgroundColor: colors.canvas, borderColor: colors.lineStrong, borderRadius: radii.sm, borderWidth: 1, color: colors.ink, fontFamily: fonts.medium, fontSize: 13, minHeight: 40, paddingHorizontal: 12 },
   emptyPreview: { backgroundColor: colors.canvas, borderColor: colors.line, borderRadius: radii.md, borderStyle: 'dashed', borderWidth: 1, color: colors.muted, fontFamily: fonts.regular, fontSize: 13, lineHeight: 20, padding: 18, textAlign: 'center' },
   eyebrow: { color: '#c8dbf7', fontFamily: fonts.bold, fontSize: 10, letterSpacing: 1.1 },
   field: { gap: 8 },

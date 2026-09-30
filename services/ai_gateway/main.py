@@ -28,7 +28,10 @@ from .models import (
     CardGenerationResponse,
 )
 from .orchestration import GenerationOrchestrator
+from .policies import EffectiveTaskPolicy, MODEL_REGISTRY_VERSION, TASK_POLICY_REGISTRY_VERSION
+from .providers.failover import FailoverGenerationProvider
 from .providers.gemini import GeminiGenerationProvider
+from .retrieval import GeminiEmbeddingProvider, HybridRetriever
 from .security import (
     GatewayAuthenticator,
     GatewayIdentity,
@@ -47,28 +50,38 @@ def create_app(
 ) -> FastAPI:
     resolved_settings = settings or GatewaySettings.from_env()
     resolved_authenticator = authenticator or _create_authenticator(resolved_settings)
-    provider = None
+    providers_to_close = []
+    embedding_provider = None
     authority_adapter = None
     if orchestrator is None and resolved_settings.gemini_api_key:
-        provider = GeminiGenerationProvider(
+        card_policy = resolved_settings.card_generation_policy
+        chat_policy = resolved_settings.bari_chat_policy
+        card_provider = _create_task_provider(resolved_settings, card_policy)
+        chat_provider = _create_task_provider(resolved_settings, chat_policy)
+        providers_to_close.extend((card_provider, chat_provider))
+        embedding_provider = GeminiEmbeddingProvider(
             resolved_settings.gemini_api_key,
-            resolved_settings.generation_model,
-            resolved_settings.provider_timeout_seconds,
-            max_attempts=resolved_settings.provider_max_attempts,
-            retry_base_delay_seconds=resolved_settings.provider_retry_base_delay_seconds,
-            retry_max_delay_seconds=resolved_settings.provider_retry_max_delay_seconds,
+            model=resolved_settings.embedding_model,
+            timeout_seconds=resolved_settings.provider_timeout_seconds,
         )
+        retriever = HybridRetriever(embedding_provider=embedding_provider)
         authority_adapter = DailyMedAdapter()
         orchestrator = GenerationOrchestrator(
-            provider,
+            card_provider,
+            chat_provider=chat_provider,
+            retriever=retriever,
             verifier=VerificationCoordinator([authority_adapter]),
+            card_policy=card_policy,
+            chat_policy=chat_policy,
         )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        if provider:
+        for provider in providers_to_close:
             await provider.close()
+        if embedding_provider:
+            await embedding_provider.close()
         if authority_adapter:
             authority_adapter.close()
 
@@ -107,6 +120,7 @@ def create_app(
     @app.get("/v1/health")
     async def health() -> dict[str, object]:
         configured = app.state.orchestrator is not None
+        has_gemini = bool(resolved_settings.gemini_api_key)
         return {
             "status": "ok" if configured else "degraded",
             "gateway": "ok",
@@ -115,9 +129,20 @@ def create_app(
                 "status": "configured" if configured else "unconfigured",
                 "provider": resolved_settings.generation_provider,
                 "model": resolved_settings.generation_model,
+                "fallbackModel": resolved_settings.fallback_generation_model,
             },
-            "embeddingProvider": "not-configured",
+            "embeddingProvider": {
+                "status": "configured" if (configured and has_gemini) else "not-configured",
+                "provider": resolved_settings.embedding_provider if has_gemini else None,
+                "model": resolved_settings.embedding_model if has_gemini else None,
+            },
             "validator": "ok",
+            "aiPolicy": {
+                "modelRegistryVersion": MODEL_REGISTRY_VERSION,
+                "taskPolicyRegistryVersion": TASK_POLICY_REGISTRY_VERSION,
+                "cardGeneration": _policy_health(resolved_settings.card_generation_policy),
+                "bariChat": _policy_health(resolved_settings.bari_chat_policy),
+            },
         }
 
     @app.get("/v1/auth-check", dependencies=[Depends(auth)])
@@ -130,7 +155,7 @@ def create_app(
         dependencies=[Depends(auth)],
     )
     async def card_generation(request: CardGenerationRequest) -> CardGenerationResponse:
-        if request.model != resolved_settings.generation_model:
+        if request.model != resolved_settings.card_generation_policy.model_id:
             raise GatewayError("model_not_allowed", "Requested model is not enabled.", 422)
         if len(request.systemPrompt) + len(request.userPrompt) > resolved_settings.max_input_characters:
             raise GatewayError("request_too_large", "Generation input is too large.", 413)
@@ -145,6 +170,49 @@ def create_app(
         return await app.state.orchestrator.bari_chat(request, identity.subject)
 
     return app
+
+
+def _create_task_provider(settings: GatewaySettings, policy: EffectiveTaskPolicy):
+    primary = GeminiGenerationProvider(
+        settings.gemini_api_key or "",
+        policy.model_id,
+        policy.timeout_seconds,
+        max_attempts=policy.max_attempts,
+        retry_base_delay_seconds=policy.retry_base_delay_seconds,
+        retry_max_delay_seconds=policy.retry_max_delay_seconds,
+        temperature=policy.temperature,
+        thinking_level=policy.thinking,
+    )
+    if not policy.fallback_model_id:
+        return primary
+    fallback = GeminiGenerationProvider(
+        settings.gemini_api_key or "",
+        policy.fallback_model_id,
+        policy.timeout_seconds,
+        max_attempts=1,
+        retry_base_delay_seconds=policy.retry_base_delay_seconds,
+        retry_max_delay_seconds=policy.retry_max_delay_seconds,
+        temperature=policy.temperature,
+        thinking_level=policy.thinking,
+    )
+    return FailoverGenerationProvider([primary, fallback])
+
+
+def _policy_health(policy: EffectiveTaskPolicy) -> dict[str, object]:
+    return {
+        "policyId": policy.policy_id,
+        "logicalModelId": policy.logical_model_id,
+        "provider": policy.provider,
+        "model": policy.model_id,
+        "fallbackLogicalModelId": policy.fallback_logical_model_id,
+        "fallbackModel": policy.fallback_model_id,
+        "promptVersion": policy.prompt_version,
+        "schemaVersion": policy.schema_version,
+        "temperature": policy.temperature,
+        "thinking": policy.thinking,
+        "timeoutSeconds": policy.timeout_seconds,
+        "maxAttempts": policy.max_attempts,
+    }
 
 
 def _create_authenticator(settings: GatewaySettings) -> GatewayAuthenticator:

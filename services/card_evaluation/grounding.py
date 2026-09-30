@@ -8,9 +8,12 @@ from services.source_span import resolve_source_span
 from .models import Claim, EvidenceSpan, GroundingResult, NormalizedCard, NumericValue, Segment
 from .text import STOP, tokens
 
-GROUNDING_VERSION = "1.3.0"
+GROUNDING_VERSION = "1.4.0"
 _NEGATION = re.compile(r"\b(no|not|never|without|cannot|can't|does not|is not)\b", re.I)
 _EXAMPLE_NEGATION = re.compile(r"\b(?:decides?|chose|chooses?)\s+not\s+to\b|\bno\s+memory\b", re.I)
+_NON_PREDICATE_NEGATION = re.compile(r"\bnot\s+using\b", re.I)
+_PROHIBITION = re.compile(r"\b(?:avoid(?:ed)?|contraindicated|do not|does not|must not|should not|not recommended)\b", re.I)
+_CLINICAL_LIST_CARD_TYPES = {"contraindication", "risk-factor"}
 _ANTONYMS = (("increase", "decrease"), ("increases", "decreases"), ("increases", "reduces"), ("high", "low"),
              ("start", "stop"), ("reversible", "irreversible"),
              ("normal", "abnormal"), ("safe", "unsafe"))
@@ -33,10 +36,14 @@ def ground_claims(card: NormalizedCard, claims: list[Claim], segments: list[Segm
             if reference.evidenceText and reference.segmentId in by_id
         ]
         citation_valid = bool(cited_text and referenced and resolutions and all(item.status in _RESOLVED for item in resolutions))
-        citation = _assess(claim, cited_text, referenced[0] if len(referenced) == 1 else None, "citation")
-        segment = _assess_many(claim, referenced, "segment")
+        citation = _assess(
+            claim, cited_text, referenced[0] if len(referenced) == 1 else None, "citation", card.cardType,
+        )
+        segment = _assess_many(claim, referenced, "segment", card.cardType)
         referenced_ids = {item.segmentId for item in referenced}
-        document = _assess_many(claim, [item for item in segments if item.segmentId not in referenced_ids], "document")
+        document = _assess_many(
+            claim, [item for item in segments if item.segmentId not in referenced_ids], "document", card.cardType,
+        )
         citation_status = _citation_status(card, claim, cited_text, citation_valid, citation, segment, resolutions)
         support, fidelity, contradictions, confidence = _resolve(
             citation, segment, document, bool(references), bool(referenced), citation_valid,
@@ -55,6 +62,14 @@ def ground_claims(card: NormalizedCard, claims: list[Claim], segments: list[Segm
 def _resolve(citation, segment, document, has_reference: bool, segment_found: bool, citation_valid: bool):
     assessments = (("supported_by_citation", citation), ("supported_by_segment", segment),
                    ("supported_elsewhere_in_source", document))
+    if citation[0] == "supported":
+        contradictions = [
+            text for _name, value in assessments for text in value[2]
+            if _name == "supported_by_citation" or text.startswith("Relation conflict")
+        ]
+        if contradictions:
+            return "contradicted", "contradicted_by_source", contradictions, 1.0
+        return "supported_by_citation", "fully_grounded", (), citation[3]
     contradictions = [text for _name, value in assessments for text in value[2]]
     if contradictions: return "contradicted", "contradicted_by_source", contradictions, 1.0
     for support, assessment in assessments:
@@ -79,12 +94,12 @@ def _citation_status(card: NormalizedCard, claim: Claim, cited_text: str, valid:
     return "partial" if _entity_overlap(claim.claimText, cited_text) else "uncertain"
 
 
-def _assess_many(claim: Claim, segments: list[Segment], tier: str):
+def _assess_many(claim: Claim, segments: list[Segment], tier: str, card_type: str = ""):
     best = ("unsupported", [], [], 0.0)
     supported = None
     contradictions: list[str] = []
     for segment in segments:
-        assessment = _assess(claim, segment.text, segment, tier)
+        assessment = _assess(claim, segment.text, segment, tier, card_type)
         if assessment[0] == "contradicted":
             contradictions.extend(assessment[2])
             continue
@@ -98,14 +113,20 @@ def _assess_many(claim: Claim, segments: list[Segment], tier: str):
     return best
 
 
-def _assess(claim: Claim, evidence: str, segment: Segment | None = None, tier: str = "citation"):
+def _assess(
+    claim: Claim,
+    evidence: str,
+    segment: Segment | None = None,
+    tier: str = "citation",
+    card_type: str = "",
+):
     if not evidence.strip(): return "unsupported", [], [], 0.0
     windows = _candidate_windows(evidence)
     best_score, best_window = max(((_support_score(claim.claimText, window), window) for window in windows), default=(0.0, ""))
-    contradiction = _contradiction(claim, best_window or evidence)
+    contradiction = _contradiction(claim, best_window or evidence, tier, card_type)
     if contradiction: return "contradicted", [], [contradiction], 1.0
     numbers_match = _numbers_supported(claim.numericValues, best_window)
-    negation_match = bool(_NEGATION.search(claim.claimText)) == bool(_NEGATION.search(best_window))
+    negation_match = _negation_agrees(claim, best_window, card_type)
     relation_match = _relation_agrees(claim.relation, best_window)
     extractive_match = _normalized(claim.claimText) in _normalized(best_window)
     structured_match = (best_score == 1.0 and relation_match and not claim.extractionAmbiguous
@@ -128,7 +149,7 @@ def _candidate_windows(text: str) -> list[str]:
 
 
 def _support_score(claim: str, evidence: str) -> float:
-    claim_tokens = [token for token in tokens(claim) if token not in STOP]
+    claim_tokens = [token for token in tokens(claim) if token not in STOP and token not in {"about", "approximately"}]
     evidence_tokens = Counter(tokens(evidence))
     return sum(evidence_tokens[token] > 0 for token in claim_tokens) / len(claim_tokens) if claim_tokens else 0.0
 
@@ -142,7 +163,12 @@ def _numbers_supported(numbers: tuple[NumericValue, ...], evidence: str) -> bool
         qualifier = number.qualifier
         if qualifier in {"<", "less than"} and "<" not in evidence and "less than" not in evidence.lower(): return False
         if qualifier in {">", "more than"} and ">" not in evidence and "more than" not in evidence.lower(): return False
-        if qualifier in {"~", "about", "approximately"} and not any(item in evidence.lower() for item in ("~", "about", "approximately")): return False
+        # Approximation weakens a population percentage range without changing
+        # its meaning. Dose and threshold qualifiers remain exacting.
+        if (qualifier in {"~", "about", "approximately"}
+                and not any(item in evidence.lower() for item in ("~", "about", "approximately"))
+                and not (number.unit == "%" and number.endValue is not None)):
+            return False
     return True
 
 
@@ -154,12 +180,15 @@ def _relation_agrees(relation: str, evidence: str) -> bool:
     return not stems.get(relation) or stems[relation] in evidence.lower()
 
 
-def _contradiction(claim: Claim, evidence: str) -> str:
+def _contradiction(claim: Claim, evidence: str, tier: str = "citation", card_type: str = "") -> str:
     lower_claim, lower_evidence = claim.claimText.lower(), evidence.lower()
     if not evidence or not _entity_overlap(lower_claim, lower_evidence): return ""
-    claim_negated = bool(_NEGATION.search(lower_claim))
-    evidence_negated = bool(_NEGATION.search(lower_evidence)) and not bool(_EXAMPLE_NEGATION.search(lower_evidence))
-    if claim_negated != evidence_negated and _support_score(lower_claim, lower_evidence) >= 0.45:
+    if tier in {"segment", "document"} and not _strong_subject_agreement(claim, lower_evidence): return ""
+    claim_negated = _has_relevant_negation(lower_claim)
+    evidence_negated = _has_relevant_negation(lower_evidence)
+    if (claim_negated != evidence_negated
+            and not _clinical_prohibition_support(claim, lower_evidence, card_type)
+            and _support_score(lower_claim, lower_evidence) >= 0.45):
         return f"Negation mismatch: claim={claim.claimText!r}; source={evidence[:240]!r}"
     claim_words, evidence_words = set(tokens(lower_claim)), set(tokens(lower_evidence))
     for left, right in _ANTONYMS:
@@ -171,6 +200,38 @@ def _contradiction(claim: Claim, evidence: str) -> str:
     if claim.numericValues and source_numbers and not _numbers_supported(claim.numericValues, evidence) and _support_score(lower_claim, lower_evidence) >= 0.45:
         return f"Numeric disagreement: claim={claim.claimText!r}; source={evidence[:240]!r}"
     return ""
+
+
+def _negation_agrees(claim: Claim, evidence: str, card_type: str) -> bool:
+    claim_negated = _has_relevant_negation(claim.claimText)
+    evidence_negated = _has_relevant_negation(evidence)
+    return claim_negated == evidence_negated or _clinical_prohibition_support(claim, evidence, card_type)
+
+
+def _has_relevant_negation(text: str) -> bool:
+    normalized = _NON_PREDICATE_NEGATION.sub("using", text)
+    return bool(_NEGATION.search(normalized)) and not bool(_EXAMPLE_NEGATION.search(normalized))
+
+
+def _clinical_prohibition_support(claim: Claim, evidence: str, card_type: str) -> bool:
+    if card_type not in _CLINICAL_LIST_CARD_TYPES or claim.location != "core_answer":
+        return False
+    if not _PROHIBITION.search(evidence):
+        return False
+    claim_tokens = {token for token in tokens(claim.claimText) if token not in STOP}
+    evidence_tokens = set(tokens(evidence))
+    return bool(claim_tokens) and claim_tokens.issubset(evidence_tokens)
+
+
+def _strong_subject_agreement(claim: Claim, evidence: str) -> bool:
+    subject_tokens = {token for token in tokens(claim.subject) if token not in STOP}
+    if not subject_tokens:
+        return False
+    evidence_tokens = set(tokens(evidence))
+    if not subject_tokens.issubset(evidence_tokens):
+        return False
+    shared_context = ({token for token in tokens(claim.claimText) if token not in STOP} & evidence_tokens) - subject_tokens
+    return bool(shared_context)
 
 
 def _entity_overlap(left: str, right: str) -> bool:

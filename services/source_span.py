@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -99,6 +100,18 @@ def resolve_source_span(
         if selected is not None:
             return _resolved("context-disambiguated", source_text, selected, selected + widths[selected], len(matches), base)
         return SourceSpanResolution(status="ambiguous", startOffset=None, endOffset=None, matchCount=len(matches), **base)
+
+    layout_matches = _bounded_layout_matches(source_text, evidence_text)
+    if len(layout_matches) == 1:
+        start, end = layout_matches[0]
+        return _resolved("normalized", source_text, start, end, 1, base)
+    if len(layout_matches) > 1:
+        candidates = [start for start, _end in layout_matches]
+        widths = {start: end - start for start, end in layout_matches}
+        selected = _select_with_context(source_text, candidates, None, context_before, context_after, widths)
+        if selected is not None:
+            return _resolved("context-disambiguated", source_text, selected, selected + widths[selected], len(layout_matches), base)
+        return SourceSpanResolution(status="ambiguous", startOffset=None, endOffset=None, matchCount=len(layout_matches), **base)
     return SourceSpanResolution(status="not-found", startOffset=None, endOffset=None, matchCount=0, **base)
 
 
@@ -159,3 +172,58 @@ def _normalize_with_map(value: str) -> tuple[str, list[int], list[int]]:
                 pending_space = None
             output.append(item); starts.append(index); ends.append(index + 1)
     return "".join(output), starts, ends
+
+
+_MIN_LAYOUT_EVIDENCE_TOKENS = 8
+_MAX_SKIPPED_TOKENS_PER_STEP = 12
+_MAX_TOTAL_SKIPPED_TOKENS = 40
+_UNSAFE_SKIPPED_TOKENS = {"no", "not", "never", "without", "cannot", "cant"}
+
+
+def _bounded_layout_matches(source_text: str, evidence_text: str) -> list[tuple[int, int]]:
+    """Match ordered source tokens split by bounded adjacent-table text."""
+    source_tokens = _source_tokens(source_text)
+    evidence_tokens = _source_tokens(evidence_text)
+    if len(evidence_tokens) < _MIN_LAYOUT_EVIDENCE_TOKENS or len(source_tokens) < len(evidence_tokens):
+        return []
+
+    allowed_total_skipped = min(_MAX_TOTAL_SKIPPED_TOKENS, len(evidence_tokens) * 2)
+    matches: list[tuple[int, int]] = []
+    for start_index, start_token in enumerate(source_tokens):
+        if start_token[0] != evidence_tokens[0][0]:
+            continue
+        source_index = start_index
+        valid = True
+        for evidence_token in evidence_tokens[1:]:
+            next_index = _find_next_token(source_tokens, evidence_token[0], source_index + 1)
+            if next_index < 0 or next_index - source_index - 1 > _MAX_SKIPPED_TOKENS_PER_STEP:
+                valid = False
+                break
+            if any(_unsafe_skipped_token(token[0]) for token in source_tokens[source_index + 1:next_index]):
+                valid = False
+                break
+            source_index = next_index
+        total_skipped = source_index - start_index + 1 - len(evidence_tokens)
+        if not valid or total_skipped < 1 or total_skipped > allowed_total_skipped:
+            continue
+        matches.append((start_token[1], source_tokens[source_index][2]))
+    return list(dict.fromkeys(matches))
+
+
+def _source_tokens(value: str) -> list[tuple[str, int, int]]:
+    return [
+        (unicodedata.normalize("NFKC", match.group(0)).lower(), match.start(), match.end())
+        for match in re.finditer(r"[^\W_]+", value, flags=re.UNICODE)
+    ]
+
+
+def _find_next_token(tokens: list[tuple[str, int, int]], value: str, start_index: int) -> int:
+    end_index = min(len(tokens), start_index + _MAX_SKIPPED_TOKENS_PER_STEP + 1)
+    for index in range(start_index, end_index):
+        if tokens[index][0] == value:
+            return index
+    return -1
+
+
+def _unsafe_skipped_token(value: str) -> bool:
+    return value in _UNSAFE_SKIPPED_TOKENS or any(character.isdigit() for character in value)

@@ -38,6 +38,18 @@ export default function PrintDeckScreen() {
     if (!deck || busy) return;
     setBusy(true);
     try {
+      if (Platform.OS === 'web') {
+        const printWindow = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+        if (printWindow) {
+          printWindow.document.write(html);
+          printWindow.document.close();
+          printWindow.focus();
+          setTimeout(() => {
+            printWindow.print();
+          }, 300);
+          return;
+        }
+      }
       await Print.printAsync({ html });
     } catch (error) {
       Alert.alert('Print did not finish', error instanceof Error ? error.message : 'Please try again.');

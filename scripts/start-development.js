@@ -5,6 +5,9 @@ const path = require('node:path');
 
 const gatewayHealthUrl = process.env.BARION_AI_GATEWAY_HEALTH_URL || 'http://127.0.0.1:8790/v1/health';
 const gatewayAuthCheckUrl = new URL('/v1/auth-check', gatewayHealthUrl).toString();
+const gatewayServerEnvPath = path.join(process.cwd(), 'services', 'ai_gateway', '.env');
+const expectedGatewayModel = readEnvValue(gatewayServerEnvPath, 'PRIMARY_GENERATION_MODEL');
+const expectedGatewayFallbackModel = readEnvValue(gatewayServerEnvPath, 'FALLBACK_GENERATION_MODEL');
 const gatewayAccessToken = process.env.EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN
   || readEnvValue(path.join(process.cwd(), '.env'), 'EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN');
 const gatewayStartupTimeoutMs = 15_000;
@@ -20,12 +23,15 @@ let closing = false;
 async function main() {
   const existingHealth = await readGatewayHealth();
   if (existingHealth) {
+    if (!gatewayMatchesLocalConfig(existingHealth)) {
+      throw new Error('Existing AI gateway uses stale model configuration. Stop old gateway process, then start again.');
+    }
     reportGateway(existingHealth, 'Reusing AI gateway');
     await reportGatewayAuth('Existing AI gateway');
   } else {
     gateway = spawn(
       'python',
-      ['-m', 'uvicorn', 'services.ai_gateway.main:app', '--host', '127.0.0.1', '--port', '8790'],
+      ['-m', 'services.ai_gateway.local_server', '--host', '127.0.0.1', '--port', '8790'],
       { cwd: process.cwd(), stdio: 'inherit', windowsHide: true },
     );
     gateway.on('error', (error) => {
@@ -142,6 +148,12 @@ function reportGateway(health, label) {
     return;
   }
   console.warn(`[Barion] ${label}, but provider is not configured. Smart Generation will use basic fallback.`);
+}
+
+function gatewayMatchesLocalConfig(health) {
+  const provider = health?.generationProvider;
+  if (expectedGatewayModel && provider?.model !== expectedGatewayModel) return false;
+  return (provider?.fallbackModel || undefined) === expectedGatewayFallbackModel;
 }
 
 function shutdown(exitCode) {

@@ -6,7 +6,7 @@ import { File as ExpoFile, Paths } from 'expo-file-system';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { cardTrustSummary } from '@/cards/trust';
 import { AppButton } from '@/components/AppButton';
@@ -265,7 +265,7 @@ export default function DeckScreen() {
   async function openBariChat() {
     if (!deck) return;
     const segments = await getSourceSegmentsForDeck(deck.id);
-    const evidence = buildBariDeckEvidence(segments);
+    const evidence = buildBariDeckEvidence(segments, 25);
     setDeckEvidence(evidence);
     setBariChatOpen(true);
   }
@@ -299,7 +299,12 @@ export default function DeckScreen() {
 
   return (
     <>
-    <ScrollView contentContainerStyle={styles.container}>
+    <FlatList
+      data={cards}
+      keyExtractor={(card) => card.id}
+      contentContainerStyle={styles.container}
+      ListHeaderComponent={
+        <>
       <View style={styles.header}>
         <View style={[styles.icon, { backgroundColor: deck.color }]}>
           <Ionicons name={deck.icon as keyof typeof Ionicons.glyphMap} size={24} color="#fff" />
@@ -381,13 +386,12 @@ export default function DeckScreen() {
           <Text style={styles.manageBody}>Archive pauses every card. Trash is recoverable and preserves review history.</Text>
         </View>
         <View style={styles.actions}>
-          <AppButton disabled={busy} icon="copy-outline" label="Copy without progress" variant="secondary" onPress={() => void copyCurrentDeck()} />
+          <AppButton disabled={busy} icon="copy-outline" label="Duplicate deck (fresh start)" variant="secondary" onPress={() => void copyCurrentDeck()} />
           <AppButton disabled={busy} icon="archive-outline" label="Archive" variant="secondary" onPress={() => void archiveCurrentDeck()} />
           <AppButton disabled={busy} icon="trash-outline" label="Move deck to Trash" variant="danger" onPress={() => void requestDeckRemoval()} />
         </View>
       </View>
 
-      <View style={styles.section}>
         <View style={styles.cardSectionHeading}>
           <Text style={styles.sectionTitle}>Cards</Text>
           <View style={styles.actions}>
@@ -407,7 +411,9 @@ export default function DeckScreen() {
             />
           </View>
         </View>
-        {cards.map((card) => {
+        </>
+      }
+      renderItem={({ item: card }) => {
           const trust = cardTrustSummary(card);
           const needsCheck = trust.tone === 'review';
           const editing = editingCardId === card.id;
@@ -429,7 +435,7 @@ export default function DeckScreen() {
               <Text style={styles.cardPrompt}>{editing ? 'Edit card wording' : card.prompt}</Text>
                 <View style={styles.cardBadges}>
                   <TrustBadge label={trust.label} tone={trust.tone} />
-                  {card.weakScore ? <Text style={styles.weakStatus}>WEAK · REPAIR</Text> : null}
+                  {card.weakScore ? <Text style={styles.weakStatus}>WEAK • REPAIR</Text> : null}
                   {card.isSuspended ? <Text style={styles.pauseStatus}>PAUSED</Text> : null}
                   {card.isFlagged ? <Text style={styles.flagStatus}>FLAGGED</Text> : null}
                   <Text style={styles.status}>{formatCardStatus(card.status)}</Text>
@@ -514,9 +520,8 @@ export default function DeckScreen() {
             ) : null}
           </View>
         );
-        })}
-      </View>
-    </ScrollView>
+      }}
+    />
     <ConfirmDialog
       body={
         confirmation?.kind === 'deck'

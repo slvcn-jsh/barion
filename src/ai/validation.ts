@@ -61,6 +61,8 @@ export async function parseGroundedCardResponse(
       continue;
     }
 
+    const targetId = readOptionalString(candidate, 'targetId', path, issues, 1, 200);
+    const frontStyle = readOptionalLiteral(candidate.frontStyle, ['term', 'question'] as const, `${path}.frontStyle`, issues);
     const segmentId = readString(candidate, 'segmentId', path, issues, 1, 200);
     const cardType = readString(candidate, 'cardType', path, issues, 1, 80);
     const learningObjective = readString(candidate, 'learningObjective', path, issues, 3, 300);
@@ -103,6 +105,8 @@ export async function parseGroundedCardResponse(
     }
     seen.add(duplicateKey);
     candidates.push({
+      ...(targetId ? { targetId } : {}),
+      ...(frontStyle ? { frontStyle } : {}),
       segmentId,
       locator: segment.locator,
       cardType,
@@ -117,6 +121,28 @@ export async function parseGroundedCardResponse(
 
   if (issues.length) throw new AIResponseValidationError(issues);
   return candidates;
+}
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  key: string,
+  parentPath: string,
+  issues: ValidationIssue[],
+  minimumLength: number,
+  maximumLength: number,
+) {
+  if (record[key] === undefined) return undefined;
+  return readString(record, key, parentPath, issues, minimumLength, maximumLength) ?? undefined;
+}
+
+function readOptionalLiteral<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  path: string,
+  issues: ValidationIssue[],
+) {
+  if (value === undefined) return undefined;
+  return readLiteral(value, allowed, path, issues) ?? undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -204,6 +230,9 @@ function parseProductionEvaluation(
   const pedagogyStatus = readLiteral(evaluation.pedagogyStatus, ['not_evaluated', 'acceptable', 'review'] as const, `${path}.pedagogyStatus`, issues);
   const publicationDisposition = readLiteral(evaluation.publicationDisposition, DISPOSITION, `${path}.publicationDisposition`, issues);
   const reasonCodes = readStringArray(evaluation.reasonCodes, `${path}.reasonCodes`, issues);
+  const validationCodes = evaluation.validationCodes === undefined
+    ? []
+    : readStringArray(evaluation.validationCodes, `${path}.validationCodes`, issues);
   const claimResults = parseClaimResults(evaluation.claimResults, `${path}.claimResults`, issues);
   const originalCandidate = parseOriginalCandidate(evaluation.originalCandidate, `${path}.originalCandidate`, issues);
   const sanitization = evaluation.sanitization === undefined || evaluation.sanitization === null
@@ -248,7 +277,7 @@ function parseProductionEvaluation(
   if (issues.length > issueCount || !contractVersion || !evaluationVersion || !policyVersion || !sourceSpan
       || evidenceSpanVerified === null || !sourceClaimSupported || !citationStatus || !medicalRisk
       || !medicalVerificationStatus || !pedagogyStatus || !publicationDisposition || !reasonCodes
-      || !claimResults || !originalCandidate) return null;
+      || !validationCodes || !claimResults || !originalCandidate) return null;
 
   return {
     contractVersion,
@@ -263,6 +292,7 @@ function parseProductionEvaluation(
     pedagogyStatus,
     publicationDisposition,
     reasonCodes,
+    validationCodes,
     claimResults,
     originalCandidate,
     sanitization,

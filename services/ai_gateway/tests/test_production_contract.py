@@ -12,6 +12,7 @@ def test_shared_production_evaluation_contract_is_valid_python_gateway_payload()
     assert candidate.evaluation is not None
     assert candidate.evaluation.publicationDisposition == "PUBLISH"
     assert candidate.evaluation.claimResults[0].sourceSupport == "supported_by_citation"
+    assert candidate.evaluation.validationCodes == []
 
 
 def test_production_evaluation_runtime_modules_are_importable():

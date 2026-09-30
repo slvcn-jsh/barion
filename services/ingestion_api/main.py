@@ -7,6 +7,11 @@ import pymupdf
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+try:
+    from .layout import extract_page_structured_text
+except ImportError:
+    from layout import extract_page_structured_text
+
 MAX_PDF_BYTES = 30 * 1024 * 1024
 MAX_PDF_PAGES = 160
 
@@ -69,7 +74,9 @@ async def extract_pdf(file: UploadFile = File(...)) -> dict[str, object]:
 
         pages = []
         for page_number, page in enumerate(document, start=1):
-            text = page.get_text("text", sort=True).strip()
+            text = extract_page_structured_text(page).strip()
+            if not text:
+                text = page.get_text("text", sort=True).strip()
             if text:
                 pages.append({"locator": f"Page {page_number}", "text": text})
 

@@ -1,0 +1,10 @@
+[skills]
+max_context_tokens = 10000
+
+[[skills.config]]
+path = "C:/Users/salva/ansel/.agents/skills/prompt-engineering/prompts-by-category/career/cover-letter-generator/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "C:/Users/salva/ansel/.agents/skills/prompt-engineering/prompts-by-category/content-creation/blog-post-generator/SKILL.md"
+enabled = false

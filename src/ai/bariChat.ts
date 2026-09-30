@@ -65,6 +65,7 @@ async function requestGatewayChat(
     const body = JSON.stringify({
       conversationId: payload.conversationId,
       message: payload.message,
+      history: payload.history ?? [],
       mode: payload.mode ?? 'source-strict',
       sourceScope: payload.sourceScope ?? {},
       courseId: payload.courseId,
@@ -284,10 +285,80 @@ export function buildBariCardEvidence(
   return segments;
 }
 
+export function retrieveRelevantSegmentsForQuery(
+  segments: SourceSegment[],
+  query: string,
+  limit = 5,
+): BariChatSourceSegment[] {
+  if (!segments.length) return [];
+  const queryClean = query.trim().toLowerCase();
+  if (!queryClean) {
+    return segments.slice(0, limit).map((s) => ({
+      segmentId: s.id,
+      locator: s.locator || 'Source segment',
+      sectionPath: s.sectionPath || 'Source',
+      text: s.text,
+    }));
+  }
+
+  const queryTokens = queryClean
+    .split(/[^a-z0-9Ͱ-Ͽἀ-῿]+/i)
+    .filter((t) => t.length >= 2);
+
+  if (!queryTokens.length) {
+    return segments.slice(0, limit).map((s) => ({
+      segmentId: s.id,
+      locator: s.locator || 'Source segment',
+      sectionPath: s.sectionPath || 'Source',
+      text: s.text,
+    }));
+  }
+
+  const scored = segments.map((seg) => {
+    const textLower = seg.text.toLowerCase();
+    const sectionLower = (seg.sectionPath || '').toLowerCase();
+    const locatorLower = (seg.locator || '').toLowerCase();
+    let score = 0;
+
+    if (textLower.includes(queryClean)) {
+      score += 15;
+    }
+
+    for (const token of queryTokens) {
+      if (textLower.includes(token)) {
+        score += 3;
+      }
+      if (sectionLower.includes(token)) {
+        score += 2;
+      }
+      if (locatorLower.includes(token)) {
+        score += 1;
+      }
+    }
+
+    return { seg, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const candidates = scored.filter((s) => s.score > 0);
+  const selected = (candidates.length > 0 ? candidates : scored).slice(0, limit);
+
+  return selected.map(({ seg }) => ({
+    segmentId: seg.id,
+    locator: seg.locator || 'Source segment',
+    sectionPath: seg.sectionPath || 'Source',
+    text: seg.text,
+  }));
+}
+
 export function buildBariDeckEvidence(
   segments: SourceSegment[],
   limit = 10,
+  query?: string,
 ): BariChatSourceSegment[] {
+  if (query) {
+    return retrieveRelevantSegmentsForQuery(segments, query, limit);
+  }
   return segments.slice(0, limit).map((s) => ({
     segmentId: s.id,
     locator: s.locator || 'Source segment',

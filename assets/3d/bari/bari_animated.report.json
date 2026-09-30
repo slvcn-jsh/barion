@@ -1,0 +1,72 @@
+{
+  "asset": "bari_animated.glb",
+  "status": "validated",
+  "sourceSha256": "a20d9e5eb04b2f650e92d883bd1796d4d959812ec69c16d90ae347254f5668ea",
+  "outputSha256": "4ab60dd67626116b8a245c17085119591c1c5747fa93f4182cce81829c7fdd90",
+  "outputBytes": 538508,
+  "meshCount": 36,
+  "nodeCount": 55,
+  "skinCount": 1,
+  "jointCount": 17,
+  "morphTargetCount": 13,
+  "animations": [
+    "blink",
+    "celebrate",
+    "encourage",
+    "error",
+    "explaining",
+    "idle",
+    "offline",
+    "talk",
+    "thinking",
+    "wave"
+  ],
+  "animationChannels": {
+    "blink": [
+      "scale"
+    ],
+    "celebrate": [
+      "rotation",
+      "scale",
+      "translation"
+    ],
+    "encourage": [
+      "rotation",
+      "scale"
+    ],
+    "error": [
+      "rotation"
+    ],
+    "explaining": [
+      "rotation"
+    ],
+    "idle": [
+      "rotation",
+      "scale"
+    ],
+    "offline": [
+      "rotation"
+    ],
+    "thinking": [
+      "rotation"
+    ],
+    "wave": [
+      "rotation"
+    ],
+    "talk": [
+      "weights"
+    ]
+  },
+  "requiredAnimations": [
+    "blink",
+    "celebrate",
+    "encourage",
+    "error",
+    "explaining",
+    "idle",
+    "offline",
+    "talk",
+    "thinking",
+    "wave"
+  ]
+}

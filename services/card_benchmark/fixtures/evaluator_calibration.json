@@ -1,0 +1,256 @@
+{
+  "fixtureVersion": "1.0.0",
+  "provenance": "project-authored",
+  "cases": [
+    {
+      "caseId": "entailed-semantic-paraphrase",
+      "goldLabel": "ENTAILED",
+      "expectedDisposition": "PUBLISH",
+      "rationale": "Passive paraphrase preserves the source proposition.",
+      "segments": [
+        {
+          "segmentId": "E001",
+          "locator": "Page 1",
+          "sectionPath": "Physiology",
+          "text": "Estrogen promotes proliferative changes in the endometrium."
+        }
+      ],
+      "card": {
+        "cardId": "cal-paraphrase",
+        "question": "What effect does estrogen have on the endometrium?",
+        "answer": "Answer: Endometrial proliferation is promoted by estrogen.",
+        "system": "calibration",
+        "segmentId": "E001",
+        "locator": "Page 1",
+        "cardType": "mechanism",
+        "learningObjective": "Recall estrogen's endometrial effect.",
+        "evidenceText": "Estrogen promotes proliferative changes in the endometrium."
+      }
+    },
+    {
+      "caseId": "unsupported-expansion",
+      "goldLabel": "UNSUPPORTED",
+      "expectedDisposition": "REJECT",
+      "rationale": "The source states an action but not a universal cure.",
+      "segments": [
+        {
+          "segmentId": "E002",
+          "locator": "Page 1",
+          "sectionPath": "Pharmacology",
+          "text": "Metformin reduces hepatic glucose production."
+        }
+      ],
+      "card": {
+        "cardId": "cal-unsupported",
+        "question": "What does metformin do?",
+        "answer": "Answer: Metformin cures diabetes permanently.",
+        "system": "calibration",
+        "segmentId": "E002",
+        "locator": "Page 1",
+        "cardType": "mechanism",
+        "learningObjective": "Recall metformin's action.",
+        "evidenceText": "Metformin reduces hepatic glucose production."
+      }
+    },
+    {
+      "caseId": "source-contradiction",
+      "goldLabel": "CONTRADICTED",
+      "expectedDisposition": "REJECT",
+      "rationale": "The generated relation reverses the source relation.",
+      "segments": [
+        {
+          "segmentId": "E003",
+          "locator": "Page 1",
+          "sectionPath": "Pharmacology",
+          "text": "Beta blockers decrease heart rate."
+        }
+      ],
+      "card": {
+        "cardId": "cal-contradiction",
+        "question": "How do beta blockers affect heart rate?",
+        "answer": "Answer: Beta blockers increase heart rate.",
+        "system": "calibration",
+        "segmentId": "E003",
+        "locator": "Page 1",
+        "cardType": "mechanism",
+        "learningObjective": "Recall beta blocker effects.",
+        "evidenceText": "Beta blockers decrease heart rate."
+      }
+    },
+    {
+      "caseId": "ambiguous-repeated-evidence",
+      "goldLabel": "AMBIGUOUS",
+      "expectedDisposition": "REVIEW",
+      "rationale": "Identical evidence occurs twice without disambiguating context.",
+      "segments": [
+        {
+          "segmentId": "E004",
+          "locator": "Page 1",
+          "sectionPath": "Notes",
+          "text": "Metformin reduces glucose. Metformin reduces glucose."
+        }
+      ],
+      "card": {
+        "cardId": "cal-ambiguous",
+        "question": "What does metformin reduce?",
+        "answer": "Answer: Metformin reduces glucose.",
+        "system": "calibration",
+        "segmentId": "E004",
+        "locator": "Page 1",
+        "cardType": "mechanism",
+        "learningObjective": "Recall metformin's effect.",
+        "evidenceText": "Metformin reduces glucose."
+      }
+    },
+    {
+      "caseId": "bad-learning-item",
+      "goldLabel": "BAD_LEARNING_ITEM",
+      "expectedDisposition": "REJECT",
+      "rationale": "The item asks about document typography rather than medical knowledge.",
+      "segments": [
+        {
+          "segmentId": "E005",
+          "locator": "Page 1",
+          "sectionPath": "Anatomy",
+          "text": "The atrium receives blood."
+        }
+      ],
+      "card": {
+        "cardId": "cal-trivial",
+        "question": "Which word begins this sentence?",
+        "answer": "Answer: The.",
+        "system": "calibration",
+        "segmentId": "E005",
+        "locator": "Page 1",
+        "cardType": "definition",
+        "learningObjective": "Recall document typography.",
+        "evidenceText": "The atrium receives blood."
+      }
+    },
+    {
+      "caseId": "qualified-numeric-facts",
+      "goldLabel": "ENTAILED",
+      "expectedDisposition": "REVIEW",
+      "rationale": "Initial and later doses are distinct, source-supported temporal facts.",
+      "segments": [
+        {
+          "segmentId": "E006",
+          "locator": "Page 1",
+          "sectionPath": "Lithium",
+          "text": "Initial lithium dose is 300 mg daily. Later lithium dose is 600 mg daily."
+        }
+      ],
+      "card": {
+        "cardId": "cal-qualified-numeric",
+        "question": "How does the lithium dose change?",
+        "answer": "Answer: Initial lithium dose is 300 mg daily.\nStudy note: Later lithium dose is 600 mg daily.",
+        "system": "calibration",
+        "segmentId": "E006",
+        "locator": "Page 1",
+        "cardType": "dose",
+        "learningObjective": "Recall initial and later lithium doses.",
+        "evidenceText": "Initial lithium dose is 300 mg daily. Later lithium dose is 600 mg daily."
+      }
+    },
+    {
+      "caseId": "true-numeric-contradiction",
+      "goldLabel": "CONTRADICTED",
+      "expectedDisposition": "REJECT",
+      "rationale": "The answer changes the source dose without a qualifying role change.",
+      "segments": [
+        {
+          "segmentId": "E007",
+          "locator": "Page 1",
+          "sectionPath": "Lithium",
+          "text": "The initial lithium dose is 300 mg daily."
+        }
+      ],
+      "card": {
+        "cardId": "cal-numeric-contradiction",
+        "question": "What is the initial lithium dose?",
+        "answer": "Answer: The initial lithium dose is 600 mg daily.",
+        "system": "calibration",
+        "segmentId": "E007",
+        "locator": "Page 1",
+        "cardType": "dose",
+        "learningObjective": "Recall the initial lithium dose.",
+        "evidenceText": "The initial lithium dose is 300 mg daily."
+      }
+    },
+    {
+      "caseId": "comparison-antonyms",
+      "goldLabel": "ENTAILED",
+      "expectedDisposition": "PUBLISH",
+      "rationale": "Opposing terms describe different named syndromes rather than a contradiction.",
+      "segments": [
+        {
+          "segmentId": "E008",
+          "locator": "Page 1",
+          "sectionPath": "Neurology",
+          "text": "Wernicke syndrome is acute and reversible. Korsakoff syndrome is chronic and irreversible."
+        }
+      ],
+      "card": {
+        "cardId": "cal-comparison",
+        "question": "How do Wernicke and Korsakoff syndromes differ?",
+        "answer": "Answer: Wernicke syndrome is acute and reversible; Korsakoff syndrome is chronic and irreversible.",
+        "system": "calibration",
+        "segmentId": "E008",
+        "locator": "Page 1",
+        "cardType": "comparison",
+        "learningObjective": "Compare Wernicke and Korsakoff syndromes.",
+        "evidenceText": "Wernicke syndrome is acute and reversible. Korsakoff syndrome is chronic and irreversible."
+      }
+    },
+    {
+      "caseId": "numbered-list-not-dose",
+      "goldLabel": "ENTAILED",
+      "expectedDisposition": "PUBLISH",
+      "rationale": "List ordinals structure two facts and are not competing clinical values.",
+      "segments": [
+        {
+          "segmentId": "E009",
+          "locator": "Page 1",
+          "sectionPath": "Anticoagulants",
+          "text": "1. Aspirin reduces platelet aggregation. 2. Warfarin inhibits vitamin K-dependent clotting factors."
+        }
+      ],
+      "card": {
+        "cardId": "cal-numbered-list",
+        "question": "How do aspirin and warfarin affect coagulation?",
+        "answer": "Answer: Aspirin reduces platelet aggregation; warfarin inhibits vitamin K-dependent clotting factors.",
+        "system": "calibration",
+        "segmentId": "E009",
+        "locator": "Page 1",
+        "cardType": "comparison",
+        "learningObjective": "Compare aspirin and warfarin actions.",
+        "evidenceText": "1. Aspirin reduces platelet aggregation. 2. Warfarin inhibits vitamin K-dependent clotting factors."
+      }
+    },
+    {
+      "caseId": "high-risk-exact-source-support",
+      "goldLabel": "ENTAILED",
+      "expectedDisposition": "REVIEW",
+      "rationale": "Source entailment is exact even when external clinical authority is unavailable.",
+      "segments": [
+        {
+          "segmentId": "E010",
+          "locator": "Page 1",
+          "sectionPath": "Lithium",
+          "text": "Lithium toxicity can occur when serum lithium concentrations exceed 1.5 mEq/L."
+        }
+      ],
+      "card": {
+        "cardId": "cal-high-risk",
+        "question": "At what serum concentration can lithium toxicity occur?",
+        "answer": "Answer: Lithium toxicity can occur when serum lithium concentrations exceed 1.5 mEq/L.",
+        "system": "calibration",
+        "segmentId": "E010",
+        "locator": "Page 1",
+        "cardType": "lab-value",
+        "learningObjective": "Recall the source's lithium toxicity threshold.",
+        "evidenceText": "Lithium toxicity can occur when serum lithium concentrations exceed 1.5 mEq/L."
+      }
+    }
+  ]
+}

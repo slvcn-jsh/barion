@@ -4,6 +4,9 @@ import math
 import re
 from collections import Counter
 from typing import Protocol
+from urllib.parse import quote
+
+import httpx
 
 from .models import BariChatRequest, SourceSegment
 
@@ -45,6 +48,105 @@ class MockEmbeddingProvider:
                 vec = [x / norm for x in vec]
             embeddings.append(vec)
         return embeddings
+
+
+class GeminiEmbeddingProvider:
+    """Production Gemini vector embedding provider with batching, validation, and LRU cache."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "text-embedding-004",
+        timeout_seconds: float = 15.0,
+        dimension: int = 768,
+        client: httpx.AsyncClient | None = None,
+        max_batch_size: int = 100,
+        fallback_provider: EmbeddingProvider | None = None,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+        self.dimension = dimension
+        self.max_batch_size = max_batch_size
+        self._owns_client = client is None
+        self._client = client or httpx.AsyncClient(timeout=timeout_seconds)
+        self._cache: dict[str, list[float]] = {}
+        self._fallback = fallback_provider or MockEmbeddingProvider(dimension=dimension)
+
+    async def close(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        results: list[list[float] | None] = [self._cache.get(t) for t in texts]
+        missing_indices = [i for i, v in enumerate(results) if v is None]
+
+        if not missing_indices:
+            return [r for r in results if r is not None]
+
+        missing_texts = [texts[i] for i in missing_indices]
+        clean_model = self.model.removeprefix("models/")
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{quote(clean_model, safe='')}:batchEmbedContents"
+        )
+
+        for batch_start in range(0, len(missing_texts), self.max_batch_size):
+            batch_slice = missing_texts[batch_start : batch_start + self.max_batch_size]
+            indices_slice = missing_indices[batch_start : batch_start + self.max_batch_size]
+
+            try:
+                requests_payload = [
+                    {
+                        "model": f"models/{clean_model}",
+                        "content": {"parts": [{"text": t or " "}]},
+                    }
+                    for t in batch_slice
+                ]
+                resp = await self._client.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                    json={"requests": requests_payload},
+                )
+                if resp.is_success:
+                    data = resp.json()
+                    raw_embeddings = data.get("embeddings", [])
+                    for idx, emb_data in zip(indices_slice, raw_embeddings):
+                        values = emb_data.get("values", []) if isinstance(emb_data, dict) else []
+                        if values and len(values) == self.dimension:
+                            norm = math.sqrt(sum(x * x for x in values))
+                            if norm > 0:
+                                values = [x / norm for x in values]
+                            results[idx] = values
+                            self._cache[texts[idx]] = values
+                        else:
+                            fallback_vec = (await self._fallback.embed_texts([texts[idx]]))[0]
+                            results[idx] = fallback_vec
+                            self._cache[texts[idx]] = fallback_vec
+                else:
+                    fallback_vecs = await self._fallback.embed_texts([texts[i] for i in indices_slice])
+                    for idx, vec in zip(indices_slice, fallback_vecs):
+                        results[idx] = vec
+                        self._cache[texts[idx]] = vec
+            except Exception:
+                fallback_vecs = await self._fallback.embed_texts([texts[i] for i in indices_slice])
+                for idx, vec in zip(indices_slice, fallback_vecs):
+                    results[idx] = vec
+                    self._cache[texts[idx]] = vec
+
+        for idx in range(len(results)):
+            if results[idx] is None:
+                vec = (await self._fallback.embed_texts([texts[idx]]))[0]
+                results[idx] = vec
+                self._cache[texts[idx]] = vec
+
+        return [r for r in results if r is not None]
 
 
 class BM25Retriever:

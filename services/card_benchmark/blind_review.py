@@ -10,13 +10,23 @@ from .analysis import core_answer
 from .io_utils import read_json, sha256_text
 from .models import Card, Concept
 
-BLIND_REVIEW_VERSION = "1.0.0"
-RUBRIC_VERSION = "1.0.0"
+BLIND_REVIEW_VERSION = "2.0.0"
+RUBRIC_VERSION = "2.0.0"
 MIN_COMPARATIVE_PAIRS = 30
 MIN_REVIEWERS = 2
 MIN_PREFERENCE_AGREEMENT = 0.70
 MIN_PREFERENCE_KAPPA = 0.40
-_SCORE_FIELDS = ("accuracy", "clarity", "learningValue")
+_SCORE_FIELDS = (
+    "accuracy",
+    "sourceFaithfulness",
+    "atomicity",
+    "clarity",
+    "answerSpecificity",
+    "learningValue",
+)
+_REVIEWER_ROLES = frozenset({"medical_student", "clinician", "medical_educator", "subject_matter_expert"})
+_TARGET_LEARNER_ROLES = frozenset({"medical_student"})
+_CLINICAL_AUTHORITY_ROLES = frozenset({"clinician", "medical_educator", "subject_matter_expert"})
 
 
 def build_blind_review(matches: list[dict[str, object]], production: list[Card], quizlet: list[Card],
@@ -39,8 +49,9 @@ def build_blind_review(matches: list[dict[str, object]], production: list[Card],
             "sourceProposition": concept.atomicProposition,
             "cardAQuestion": left.question, "cardAAnswer": core_answer(left.answer),
             "cardBQuestion": right.question, "cardBAnswer": core_answer(right.answer),
-            "reviewerId": "", "accuracyA": "", "accuracyB": "", "clarityA": "", "clarityB": "",
-            "learningValueA": "", "learningValueB": "", "preference": "", "exclusionReason": "", "notes": "",
+            "reviewerId": "", "reviewerRole": "",
+            **{f"{field}{side}": "" for field in _SCORE_FIELDS for side in ("A", "B")},
+            "preference": "", "exclusionReason": "", "notes": "",
         })
         key.append({"pairId": pair_id, "conceptId": concept.conceptId,
                     "cardAId": left.cardId, "systemA": left.system,
@@ -53,7 +64,8 @@ def review_protocol(pair_count: int) -> dict[str, object]:
         "blindReviewVersion": BLIND_REVIEW_VERSION, "rubricVersion": RUBRIC_VERSION,
         "instructions": [
             "Each reviewer copies blind_review.csv and works independently without opening private/blind_review_key.json.",
-            "Score each card against source proposition: accuracy, clarity, and learning value from 1 (poor) to 5 (excellent).",
+            "Use a stable pseudonymous reviewerId and one reviewerRole: medical_student, clinician, medical_educator, or subject_matter_expert.",
+            "Score accuracy, source faithfulness, atomicity, clarity, answer specificity, and learning value from 1 (poor) to 5 (excellent).",
             "Choose preference A, B, or TIE. Use exclusionReason only when source extraction prevents fair judgment.",
             "Do not infer system identity from formatting or coordinate scores before submission.",
         ],
@@ -72,6 +84,8 @@ def review_protocol(pair_count: int) -> dict[str, object]:
 
 
 def _validate_review_row(row: dict[str, str], path: Path) -> None:
+    if row.get("reviewerRole", "").strip() not in _REVIEWER_ROLES:
+        raise ValueError(f"{path}: reviewerRole must be one of {sorted(_REVIEWER_ROLES)}.")
     for field in _SCORE_FIELDS:
         for side in ("A", "B"):
             try:
@@ -121,6 +135,7 @@ def score_review_files(run_dir: Path, review_paths: list[Path]) -> dict[str, obj
         raise ValueError("Blind-review protocol version differs from scorer version.")
     pair_ids = {str(row["pairId"]) for row in key}; key_map = {str(row["pairId"]): row for row in key}
     reviewers: dict[str, dict[str, dict[str, str]]] = {}
+    reviewer_roles: dict[str, str] = {}
     for path in review_paths:
         with path.open(encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -130,6 +145,10 @@ def score_review_files(run_dir: Path, review_paths: list[Path]) -> dict[str, obj
         reviewer = next(iter(reviewer_ids))
         if reviewer in reviewers:
             raise ValueError(f"Duplicate reviewerId: {reviewer}.")
+        roles = {row.get("reviewerRole", "").strip() for row in rows if row.get("reviewerRole", "").strip()}
+        if len(roles) != 1:
+            raise ValueError(f"{path} must contain exactly one non-empty reviewerRole.")
+        reviewer_roles[reviewer] = next(iter(roles))
         included = {row.get("pairId", ""): row for row in rows if not row.get("exclusionReason", "").strip()}
         if set(included) != pair_ids:
             raise ValueError(f"{path} must score every pair without exclusions before comparative claims.")
@@ -139,6 +158,7 @@ def score_review_files(run_dir: Path, review_paths: list[Path]) -> dict[str, obj
 
     system_scores: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     pair_deltas: list[float] = []; preferences: dict[str, list[str]] = defaultdict(list)
+    production_acceptance: list[bool] = []
     for pair_id in sorted(pair_ids):
         systems = key_map[pair_id]; per_reviewer_delta = []
         for rows in reviewers.values():
@@ -149,6 +169,7 @@ def score_review_files(run_dir: Path, review_paths: list[Path]) -> dict[str, obj
                     system_scores[str(systems[f"system{side}"])][field].append(score)
             production_side = "A" if systems["systemA"] == "production" else "B"
             quizlet_side = "B" if production_side == "A" else "A"
+            production_acceptance.append(all(float(row[f"{field}{production_side}"]) >= 4 for field in _SCORE_FIELDS))
             per_reviewer_delta.append(_mean(side_scores[production_side]) - _mean(side_scores[quizlet_side]))
             preference = row["preference"].strip().upper()
             preferences[pair_id].append("tie" if preference == "TIE" else str(systems[f"system{preference}"]))
@@ -167,15 +188,20 @@ def score_review_files(run_dir: Path, review_paths: list[Path]) -> dict[str, obj
         "preferenceKappa": kappa >= MIN_PREFERENCE_KAPPA,
         "productionAccuracy": means.get("production", {}).get("accuracy", 0.0) >= 4.0,
         "productionSafety": evaluation.get("contradictions", 0) == 0 and evaluation.get("criticalFailures", 0) == 0,
+        "targetLearnerReview": any(role in _TARGET_LEARNER_ROLES for role in reviewer_roles.values()),
+        "clinicalAuthorityReview": any(role in _CLINICAL_AUTHORITY_ROLES for role in reviewer_roles.values()),
         "productionSuperiority": ci_low > 0.0,
     }
     validity_names = ("productionQuantityContract", "minimumPairs", "minimumReviewers",
-                      "preferenceAgreement", "preferenceKappa", "productionSafety")
+                      "preferenceAgreement", "preferenceKappa", "productionSafety",
+                      "targetLearnerReview", "clinicalAuthorityReview")
     valid = all(gates[name] for name in validity_names)
     return {
         "blindReviewVersion": BLIND_REVIEW_VERSION, "rubricVersion": RUBRIC_VERSION,
         "pairCount": len(pair_ids), "reviewerCount": len(reviewers), "reviewerIds": sorted(reviewers),
+        "reviewerRoles": dict(sorted(reviewer_roles.items())),
         "systemMeans": means, "preferenceCounts": dict(sorted(preference_counts.items())),
+        "humanAcceptanceRate": round(_mean([1.0 if accepted else 0.0 for accepted in production_acceptance]), 4),
         "preferenceAgreement": round(agreement, 4), "preferenceKappa": round(kappa, 4),
         "productionOverallDelta": round(_mean(pair_deltas), 4),
         "productionOverallDelta95Ci": [round(ci_low, 4), round(ci_high, 4)],

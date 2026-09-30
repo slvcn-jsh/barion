@@ -18,12 +18,19 @@ $env:BARION_AI_AUTH_MODE='static'
 $env:BARION_AI_GATEWAY_AUTH_TOKEN='replace-with-long-random-token'
 $env:GEMINI_API_KEY='replace-with-provider-key'
 $env:PRIMARY_GENERATION_PROVIDER='gemini'
-$env:PRIMARY_GENERATION_MODEL='gemini-2.5-flash'
-$env:BARION_AI_PROVIDER_MAX_ATTEMPTS='4'
+$env:PRIMARY_GENERATION_MODEL='gemini-3.8-flash'
+$env:FALLBACK_GENERATION_MODEL='gemini-3.5-flash-lite'
+$env:BARI_CHAT_MODEL='gemini-3.8-flash'
+$env:BARI_CHAT_FALLBACK_MODEL='gemini-3.5-flash-lite'
+$env:BARION_AI_PROVIDER_MAX_ATTEMPTS='3'
 $env:BARION_AI_PROVIDER_RETRY_BASE_DELAY_SECONDS='1'
 $env:BARION_AI_PROVIDER_RETRY_MAX_DELAY_SECONDS='16'
+$env:BARI_CHAT_PROVIDER_TIMEOUT_SECONDS='20'
+$env:BARI_CHAT_PROVIDER_MAX_ATTEMPTS='3'
+$env:BARI_CHAT_PROVIDER_RETRY_BASE_DELAY_SECONDS='1'
+$env:BARI_CHAT_PROVIDER_RETRY_MAX_DELAY_SECONDS='16'
 $env:BARION_AI_ALLOWED_ORIGINS='http://localhost:8081,http://127.0.0.1:8081'
-python -m uvicorn services.ai_gateway.main:app --host 127.0.0.1 --port 8790
+python -m services.ai_gateway.local_server --host 127.0.0.1 --port 8790
 ```
 
 Production authentication:
@@ -41,7 +48,7 @@ Client development values:
 
 ```powershell
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_URL='http://127.0.0.1:8790'
-$env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-2.5-flash'
+$env:EXPO_PUBLIC_BARION_AI_MODEL='gemini-3.8-flash'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TIMEOUT_MS='120000'
 $env:EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN='same-development-token'
 npm run web
@@ -51,9 +58,15 @@ npm run web
 
 `EXPO_PUBLIC_BARION_AI_GATEWAY_TOKEN` is only acceptable in local static-auth mode. Expo embeds it in compiled bundles, so it is not a secret and must never be a provider API key. Production clients send short-lived Supabase session access tokens obtained at request time; omit static token from production builds.
 
+Local gateway launcher loads `services/ai_gateway/.env` with priority over stale parent-shell values. This prevents an older `GEMINI_API_KEY` from silently shadowing current service key. Restart gateway after changing provider secrets. Production must start Uvicorn directly and use deployment-managed environment values.
+
 Physical devices must use gateway machine's LAN address. Production gateway URL must use HTTPS.
 
 Gemini calls retry bounded transient failures: HTTP 429/500/502/503/504, timeouts, and transport errors. Recommended local settings use 3 total attempts, 20 seconds per provider attempt, full-jitter exponential delays capped at 16 seconds, and a 120-second Expo gateway deadline. Provider `Retry-After`/`RetryInfo.retryDelay` hints remain capped at same maximum. Authentication and invalid-request failures are not retried.
+
+When `FALLBACK_GENERATION_MODEL` is configured, exhausted recoverable primary failures receive one attempt on fallback model. Successful responses report actual model used. Primary retries plus fallback timeout must remain inside client deadline.
+
+Card generation and Bari Chat resolve independent effective task policies. `BARI_CHAT_MODEL`, `BARI_CHAT_FALLBACK_MODEL`, and `BARI_CHAT_PROVIDER_*` override only chat; omitted chat settings inherit generation settings. Startup rejects either task policy when its worst-case retry plus fallback duration exceeds the 120-second client deadline. `/v1/health` reports logical policy/model IDs and effective physical configuration without exposing credentials.
 
 ## API
 

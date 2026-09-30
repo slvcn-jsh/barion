@@ -1,6 +1,5 @@
 import * as Crypto from 'expo-crypto';
 import * as SQLite from 'expo-sqlite';
-import { Platform } from 'react-native';
 
 import {
   BARION_BACKUP_FORMAT,
@@ -23,6 +22,7 @@ import {
   recoverInterruptedGenerationJobs,
   refreshSearchIndex,
 } from '@/storage/database';
+import { runWriteTransaction } from '@/storage/repositories/shared';
 
 export type OfflineDataSummary = {
   courseCount: number;
@@ -236,15 +236,4 @@ async function checksumPayload(payload: BarionBackupPayload) {
     Crypto.CryptoDigestAlgorithm.SHA256,
     payloadForChecksum(payload),
   );
-}
-
-async function runWriteTransaction(
-  db: SQLite.SQLiteDatabase,
-  task: (txn: SQLite.SQLiteDatabase) => Promise<void>,
-) {
-  if (Platform.OS === 'web') {
-    await db.withTransactionAsync(async () => task(db));
-    return;
-  }
-  await db.withExclusiveTransactionAsync(task);
 }

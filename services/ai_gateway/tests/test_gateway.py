@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -16,10 +20,15 @@ os.environ.setdefault("BARION_AI_GATEWAY_AUTH_TOKEN", "module-test-token")
 
 from ..config import GatewaySettings
 from ..errors import GatewayError
+from .. import local_server
+from .. import orchestration as gateway_orchestration
+from .. import telemetry as gateway_telemetry
 from ..main import create_app
 from ..models import BariChatRequest, CardGenerationRequest, GeneratedCard, GeneratedCardOutput, ProviderUsage, SourceSegment
 from ..orchestration import GenerationOrchestrator
+from ..policies import CARD_GENERATION_POLICY, resolve_task_policy
 from ..providers.base import BariChatResult, ProviderResult
+from ..providers.failover import FailoverGenerationProvider
 from ..providers.gemini import GeminiGenerationProvider
 from ..security import SupabaseJWTAuthenticator
 
@@ -58,6 +67,7 @@ class FakeProvider:
                 ),
             ]),
             usage=ProviderUsage(inputTokens=21, outputTokens=12),
+            diagnostics={"retryCount": 0, "fallbackUsed": False},
         )
 
     async def bari_chat(self, request, conversation_history):
@@ -211,6 +221,83 @@ def test_provider_retry_defaults_fit_inside_client_generation_deadline(monkeypat
     assert configured.provider_max_attempts == 3
 
 
+def test_card_success_telemetry_uses_effective_policy_provenance(monkeypatch):
+    events = []
+    monkeypatch.setattr(gateway_orchestration, "record", events.append)
+    policy = resolve_task_policy(
+        replace(
+            CARD_GENERATION_POLICY,
+            policy_id="bari-cardgen-test-policy",
+            schema_version="gateway-card-schema-test",
+        ),
+        provider="fake",
+        model_id="test-model",
+        fallback_model_id=None,
+    )
+    orchestrator = GenerationOrchestrator(FakeProvider(), card_policy=policy)
+
+    asyncio.run(
+        orchestrator.generate_cards(
+            CardGenerationRequest.model_validate(request_body())
+        )
+    )
+
+    event = events[-1]
+    assert event.success is True
+    assert event.policyId == "bari-cardgen-test-policy"
+    assert event.logicalModelId == "fake:test-model"
+    assert event.promptVersion == "1.1.0"
+    assert event.schemaVersion == "gateway-card-schema-test"
+    assert event.policyConfiguration["temperature"] == .2
+    assert event.diagnostics == {"retryCount": 0, "fallbackUsed": False}
+
+
+def test_success_telemetry_is_enabled_by_default():
+    assert gateway_telemetry.logger.getEffectiveLevel() <= logging.INFO
+
+
+def test_local_server_overrides_stale_parent_provider_key(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        local_server,
+        "load_dotenv",
+        lambda path, *, override: calls.append((path, override)),
+    )
+
+    local_server.load_local_environment(Path("service.env"))
+
+    assert calls == [(Path("service.env"), True)]
+
+
+def test_fallback_model_is_loaded_and_kept_inside_client_deadline(monkeypatch):
+    monkeypatch.setenv("FALLBACK_GENERATION_MODEL", "gemini-fallback")
+    monkeypatch.setenv("BARION_AI_PROVIDER_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("BARION_AI_PROVIDER_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("BARION_AI_PROVIDER_RETRY_MAX_DELAY_SECONDS", "16")
+
+    configured = GatewaySettings.from_env()
+
+    assert configured.fallback_generation_model == "gemini-fallback"
+
+
+def test_fallback_model_rejects_duplicate_primary(monkeypatch):
+    monkeypatch.setenv("PRIMARY_GENERATION_MODEL", "gemini-same")
+    monkeypatch.setenv("FALLBACK_GENERATION_MODEL", "gemini-same")
+
+    with pytest.raises(GatewayError, match="FALLBACK_GENERATION_MODEL"):
+        GatewaySettings.from_env()
+
+
+def test_fallback_model_rejects_total_deadline_overrun(monkeypatch):
+    monkeypatch.setenv("FALLBACK_GENERATION_MODEL", "gemini-fallback")
+    monkeypatch.setenv("BARION_AI_PROVIDER_TIMEOUT_SECONDS", "20")
+    monkeypatch.setenv("BARION_AI_PROVIDER_MAX_ATTEMPTS", "4")
+    monkeypatch.setenv("BARION_AI_PROVIDER_RETRY_MAX_DELAY_SECONDS", "16")
+
+    with pytest.raises(GatewayError, match="120-second client generation deadline"):
+        GatewaySettings.from_env()
+
+
 def test_provider_retry_configuration_rejects_deadline_overrun(monkeypatch):
     monkeypatch.setenv("BARION_AI_PROVIDER_TIMEOUT_SECONDS", "120")
     monkeypatch.setenv("BARION_AI_PROVIDER_MAX_ATTEMPTS", "2")
@@ -346,6 +433,18 @@ def test_health_does_not_expose_credentials():
     assert payload["status"] == "ok"
     assert "provider-secret" not in json.dumps(payload)
     assert "test-token" not in json.dumps(payload)
+
+
+def test_gateway_wires_configured_fallback_model():
+    app = create_app(settings(fallback_generation_model="fallback-model"))
+
+    assert isinstance(app.state.orchestrator.provider, FailoverGenerationProvider)
+    assert [provider.model for provider in app.state.orchestrator.provider.providers] == [
+        "test-model",
+        "fallback-model",
+    ]
+    payload = TestClient(app).get("/v1/health").json()
+    assert payload["generationProvider"]["fallbackModel"] == "fallback-model"
 
 
 def test_auth_check_verifies_configured_gateway_credential():
@@ -674,6 +773,18 @@ def test_gemini_adapter_retries_503_until_success_with_exponential_jitter():
             )
             result = await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
             assert result.request_id == "success-request"
+            assert result.diagnostics == {
+                "attempt": 3,
+                "maxAttempts": 4,
+                "retryCount": 2,
+                "retriesExhausted": False,
+                "retryHistory": [
+                    {"attempt": 1, "providerStatus": 503, "delayMs": 1000,
+                     "providerRequestId": "retry-1"},
+                    {"attempt": 2, "providerStatus": 503, "delayMs": 2000,
+                     "providerRequestId": "retry-2"},
+                ],
+            }
 
     asyncio.run(run())
     assert attempts == 3
@@ -860,7 +971,7 @@ def test_gemini_adapter_rejects_malformed_structured_output():
     asyncio.run(run())
 
 
-def test_orchestrator_rejects_validated_underproduction():
+def test_orchestrator_returns_validated_partial_output_for_batch_gap_recovery():
     body = {**request_body(), "minCandidates": 2}
     client = TestClient(create_app(settings(), GenerationOrchestrator(FakeProvider())))
     response = client.post(
@@ -868,15 +979,8 @@ def test_orchestrator_rejects_validated_underproduction():
         headers={"Authorization": "Bearer test-token"},
         json=body,
     )
-    assert response.status_code == 502
-    error = response.json()["error"]
-    assert error["code"] == "insufficient_candidates"
-    assert error["provider"] == "fake"
-    assert error["model"] == "test-model"
-    assert error["providerRequestId"] == "provider-request-1"
-    assert error["inputTokens"] == 21
-    assert error["outputTokens"] == 12
-    assert error["remoteCandidateCount"] == 2
+    assert response.status_code == 200
+    assert len(response.json()["output"]["candidates"]) == 1
 
 
 def test_orchestrator_accepts_valid_small_deck_when_minimum_is_one():
@@ -889,6 +993,29 @@ def test_orchestrator_accepts_valid_small_deck_when_minimum_is_one():
     )
     assert response.status_code == 200
     assert len(response.json()["output"]["candidates"]) == 1
+
+
+def test_orchestrator_returns_rejected_candidates_for_internal_omission_audit():
+    rejected = GeneratedCard(
+        segmentId="segment-1",
+        cardType="mechanism",
+        learningObjective="Recall an unsupported metformin action.",
+        question="How does metformin increase hepatic glucose production?",
+        answer="Metformin increases hepatic glucose production.",
+        evidenceText="Metformin reduces hepatic glucose production.",
+    )
+    body = {**request_body(), "minCandidates": 1}
+    client = TestClient(create_app(settings(), GenerationOrchestrator(StaticCardProvider(rejected))))
+
+    response = client.post(
+        "/v1/card-generation",
+        headers={"Authorization": "Bearer test-token"},
+        json=body,
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["output"]["candidates"][0]
+    assert candidate["evaluation"]["publicationDisposition"] == "REJECT"
 
 
 def test_generation_request_defaults_to_legacy_single_candidate_minimum():
@@ -932,6 +1059,27 @@ def test_gemini_adapter_uses_server_key_and_structured_schema():
             result = await provider.generate_cards(CardGenerationRequest.model_validate(request_body()))
             assert result.request_id == "gemini-request-1"
             assert result.usage == ProviderUsage(inputTokens=9, outputTokens=2)
+
+    asyncio.run(run())
+
+
+def test_gemini_bari_chat_generates_request_id_when_provider_omits_header():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Grounded answer."}]}}],
+                "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2},
+            },
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            provider = GeminiGenerationProvider("provider-secret", "test-model", 30, http_client)
+            result = await provider.bari_chat(BariChatRequest(message="Explain this."), [])
+            assert result.request_id.startswith("bari-")
+            assert result.provider_id == "gemini"
+            assert result.model_id == "test-model"
 
     asyncio.run(run())
 
@@ -1091,3 +1239,40 @@ def test_bari_chat_citation_matching_formats():
     citation_locators = [c['locator'] for c in payload['citations']]
     assert 'Page 15' in citation_locators
     assert 'Page 10' in citation_locators
+
+
+def test_bari_chat_with_client_supplied_history():
+    class HistoryCheckingProvider:
+        id = "fake"
+        model = "test-model"
+        async def generate_cards(self, req): pass
+        async def bari_chat(self, req, history):
+            assert len(history) == 2
+            assert history[0]["role"] == "user"
+            assert history[0]["content"] == "Prior user question"
+            assert history[1]["role"] == "model"
+            assert history[1]["content"] == "Prior assistant reply"
+            return BariChatResult(
+                request_id="chat-hist-1",
+                message="Understood following context.",
+                usage=ProviderUsage(inputTokens=30, outputTokens=10),
+            )
+
+    app = create_app(settings(), GenerationOrchestrator(HistoryCheckingProvider()))
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/bari/chat",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "conversationId": "conv-client-hist",
+            "message": "Follow up question",
+            "mode": "source-strict",
+            "history": [
+                {"role": "user", "text": "Prior user question"},
+                {"role": "bari", "text": "Prior assistant reply"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Understood following context."

@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,7 +16,9 @@ import {
 
 import { sendBariChatMessage } from '@/ai/bariChat';
 import type { BariChatSourceSegment, BariCitation } from '@/ai/types';
+import { createSupabaseAccessTokenProvider } from '@/auth';
 import { BariMascot } from '@/components/BariMascot';
+import { BariModel, type Bari3DState } from '@/components/bari3d';
 import { clearBariConversation, getOrCreateBariConversation, saveBariMessage } from '@/storage/repository';
 import { colors, fonts, radii } from '@/theme/colors';
 
@@ -45,6 +48,101 @@ const SUGGESTIONS = [
   'What are the main risks or contraindications?',
 ];
 
+const BARI_TRANSIENT_STATE_MS = 3600;
+
+const BARI_STATE_MESSAGE: Record<Bari3DState, string> = {
+  idle: 'Ready for your next study question.',
+  greeting: 'Source-grounded explanations from your study materials.',
+  thinking: 'Reading your notes and checking source evidence…',
+  explaining: 'Building your explanation from linked evidence.',
+  celebrating: 'Strong work. Keep the momentum going.',
+  encouraging: 'You are making progress. Keep asking questions.',
+  offline: 'Offline answer ready from evidence stored on this device.',
+  error: 'Bari hit a problem. Your chat and notes remain safe.',
+};
+
+const ChatMessageBubble = React.memo(function ChatMessageBubble({
+  msg,
+  expandedLocator,
+  onToggleCitation,
+  evidence,
+}: {
+  msg: ChatMessage;
+  expandedLocator: string | null;
+  onToggleCitation: (locator: string) => void;
+  evidence: BariChatSourceSegment[];
+}) {
+  return (
+    <View
+      style={[
+        styles.messageBubble,
+        msg.role === 'user' ? styles.userBubble : styles.bariBubble,
+      ]}
+    >
+      {msg.role === 'bari' ? (
+        <View style={styles.bariHeaderRow}>
+          <BariMascot size="sm" expression="explaining" showBadge animated={false} />
+          <Text style={styles.bariName}>Bari</Text>
+        </View>
+      ) : null}
+
+      <Text
+        style={[
+          styles.messageText,
+          msg.role === 'user' ? styles.userMessageText : styles.bariMessageText,
+        ]}
+      >
+        {msg.text}
+      </Text>
+
+      {msg.citations && msg.citations.length > 0 ? (
+        <View style={styles.citationsContainer}>
+          <Text style={styles.citationsLabel}>SOURCE EVIDENCE</Text>
+          <View style={styles.citationPills}>
+            {msg.citations.map((cit, idx) => {
+              const locator = cit.locator || `Source ${idx + 1}`;
+              const isExpanded = expandedLocator === locator;
+              const matchingSegment = (msg.evidence || evidence).find(
+                (e) => e.locator === cit.locator || e.segmentId === cit.segmentId,
+              );
+
+              return (
+                <View key={`cit-${idx}`} style={styles.citationItem}>
+                  <Pressable
+                    accessibilityLabel={`View citation: ${locator}`}
+                    accessibilityRole="button"
+                    onPress={() => onToggleCitation(locator)}
+                    style={[styles.citationPill, isExpanded && styles.citationPillActive]}
+                  >
+                    <Ionicons name="bookmark-outline" size={13} color={colors.tealDark} />
+                    <Text style={styles.citationText}>{locator}</Text>
+                    <Ionicons
+                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={12}
+                      color={colors.tealDark}
+                    />
+                  </Pressable>
+
+                  {isExpanded && matchingSegment ? (
+                    <View style={styles.expandedCitationCard}>
+                      <Text style={styles.expandedCitationPath}>
+                        {matchingSegment.sectionPath || matchingSegment.locator}
+                      </Text>
+                      <Text style={styles.expandedCitationText}>
+                        {matchingSegment.text}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+});
+
 export function BariChatModal({
   visible,
   onClose,
@@ -58,11 +156,19 @@ export function BariChatModal({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [bariState, setBariState] = useState<Bari3DState>('greeting');
   const [expandedCitation, setExpandedCitation] = useState<string | null>(null);
-  const scrollViewRef = useRef<ScrollView>(null);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
+
+  useEffect(() => {
+    if (bariState !== 'greeting' && bariState !== 'explaining') return;
+    const timeout = setTimeout(() => setBariState('idle'), BARI_TRANSIENT_STATE_MS);
+    return () => clearTimeout(timeout);
+  }, [bariState]);
 
   useEffect(() => {
     if (!visible) return;
+    setBariState('greeting');
     let active = true;
     void (async () => {
       try {
@@ -74,6 +180,7 @@ export function BariChatModal({
         if (!active) return;
         setConversationId(conv.id);
         if (conv.messages.length > 0) {
+          setBariState('idle');
           setMessages(
             conv.messages.map((m) => ({
               id: m.id,
@@ -97,6 +204,7 @@ export function BariChatModal({
         }
       } catch {
         if (!active) return;
+        setBariState('error');
         setMessages([{
           id: 'msg-greeting-fallback',
           role: 'bari',
@@ -113,55 +221,103 @@ export function BariChatModal({
     const activeConvId = explicitConvId || conversationId;
     if (!textToSend || loading) return;
 
+    const userMsgId = `msg-user-${Date.now()}`;
+    const userCreatedAt = new Date().toISOString();
     const userMessage: ChatMessage = {
-      id: `msg-user-${Date.now()}`,
+      id: userMsgId,
       role: 'user',
       text: textToSend,
-      createdAt: new Date().toISOString(),
+      createdAt: userCreatedAt,
     };
+
+    const recentHistory = messages
+      .filter((m) => m.id !== 'msg-greeting' && m.id !== 'msg-greeting-fallback')
+      .slice(-10)
+      .map((m) => ({
+        role: m.role as 'user' | 'bari',
+        text: m.text,
+      }));
 
     setMessages((prev) => [...prev, userMessage]);
     if (!promptText) setInput('');
     setLoading(true);
-    if (activeConvId) { void saveBariMessage(activeConvId, 'user', textToSend); }
+    setBariState('thinking');
+    if (activeConvId) {
+      try {
+        await saveBariMessage(activeConvId, 'user', textToSend, [], [], userMsgId, userCreatedAt);
+      } catch (err) {
+        console.warn('Failed to persist user message', err);
+      }
+    }
 
     try {
       const response = await sendBariChatMessage({
+        conversationId: activeConvId ?? undefined,
         message: textToSend,
+        history: recentHistory,
         evidence,
         mode: 'source-strict',
+      }, {
+        accessTokenProvider: createSupabaseAccessTokenProvider(),
       });
 
+      const bariMsgId = `msg-bari-${Date.now()}`;
+      const bariCreatedAt = new Date().toISOString();
       const bariMessage: ChatMessage = {
-        id: `msg-bari-${Date.now()}`,
+        id: bariMsgId,
         role: 'bari',
         text: response.message,
         citations: response.citations,
         evidence: response.evidence,
-        createdAt: new Date().toISOString(),
+        createdAt: bariCreatedAt,
       };
 
       setMessages((prev) => [...prev, bariMessage]);
-      if (activeConvId) { void saveBariMessage(activeConvId, 'bari', response.message, response.citations, response.evidence); }
+      setBariState(response.generation.provider === 'local-fallback' ? 'offline' : 'explaining');
+      if (activeConvId) {
+        try {
+          await saveBariMessage(activeConvId, 'bari', response.message, response.citations, response.evidence, bariMsgId, bariCreatedAt);
+        } catch (err) {
+          console.warn('Failed to persist Bari response', err);
+        }
+      }
     } catch (error) {
+      setBariState('error');
+      const errMsgId = `msg-err-${Date.now()}`;
+      const errCreatedAt = new Date().toISOString();
       const errorMessage: ChatMessage = {
-        id: `msg-err-${Date.now()}`,
+        id: errMsgId,
         role: 'bari',
         text: "I couldn't complete that explanation right now. Here is what your note segment mentions: " +
           (evidence[0]?.text ? `"${evidence[0].text.slice(0, 200)}…"` : 'No source notes linked.'),
-        createdAt: new Date().toISOString(),
+        createdAt: errCreatedAt,
       };
       setMessages((prev) => [...prev, errorMessage]);
-      if (activeConvId) { void saveBariMessage(activeConvId, 'bari', errorMessage.text); }
+      if (activeConvId) {
+        try {
+          await saveBariMessage(activeConvId, 'bari', errorMessage.text, [], [], errMsgId, errCreatedAt);
+        } catch (err) {
+          console.warn('Failed to persist error message', err);
+        }
+      }
     } finally {
       setLoading(false);
-      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 150);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
     }
   }
 
-  function toggleCitation(locator: string) {
+  const toggleCitation = useCallback((locator: string) => {
     setExpandedCitation((prev) => (prev === locator ? null : locator));
-  }
+  }, []);
+
+  const renderMessageItem = useCallback(({ item }: { item: ChatMessage }) => (
+    <ChatMessageBubble
+      evidence={evidence}
+      expandedLocator={expandedCitation}
+      msg={item}
+      onToggleCitation={toggleCitation}
+    />
+  ), [evidence, expandedCitation, toggleCitation]);
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
@@ -183,110 +339,48 @@ export function BariChatModal({
                 ) : null}
               </View>
             </View>
-            <Pressable accessibilityLabel="Close Bari chat" onPress={onClose} style={styles.closeButton}>
+            <Pressable
+              accessibilityLabel="Close Bari chat"
+              accessibilityRole="button"
+              onPress={onClose}
+              style={styles.closeButton}
+            >
               <Ionicons name="close" size={22} color={colors.inkSoft} />
             </Pressable>
           </View>
 
+          <View style={[styles.mascotHero, messages.length > 1 && styles.mascotHeroCompact]}>
+            <BariModel
+              size={messages.length > 1 ? 72 : 96}
+              state={bariState}
+              style={styles.mascotHeroModel}
+            />
+            <View style={styles.mascotHeroText}>
+              <Text style={styles.mascotHeroTitle}>Bari Study Companion</Text>
+              <Text style={styles.mascotHeroTagline}>LEARN TODAY. HEAL TOMORROW.</Text>
+              <Text style={styles.mascotHeroBody}>{BARI_STATE_MESSAGE[bariState]}</Text>
+            </View>
+          </View>
+
           {/* Chat Messages */}
-          <ScrollView
-            ref={scrollViewRef}
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(msg) => msg.id}
             contentContainerStyle={styles.messageList}
-            onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
             style={styles.scrollArea}
-          >
-            {messages.length <= 1 && !loading ? (
-              <View style={styles.mascotHero}>
-                <BariMascot size="lg" expression="happy" showBadge interactive />
-                <View style={styles.mascotHeroText}>
-                  <Text style={styles.mascotHeroTitle}>Bari Study Companion</Text>
-                  <Text style={styles.mascotHeroTagline}>LEARN TODAY. HEAL TOMORROW.</Text>
-                  <Text style={styles.mascotHeroBody}>
-                    Source-grounded explanations directly from your study materials.
-                  </Text>
+            ListFooterComponent={
+              loading ? (
+                <View style={[styles.messageBubble, styles.bariBubble, styles.loadingBubble]}>
+                  <BariMascot size="sm" expression="thinking" />
+                  <ActivityIndicator color={colors.teal} size="small" style={styles.loadingSpinner} />
+                  <Text style={styles.loadingText}>Bari is reading your notes…</Text>
                 </View>
-              </View>
-            ) : null}
-
-            {messages.map((msg) => (
-              <View
-                key={msg.id}
-                style={[
-                  styles.messageBubble,
-                  msg.role === 'user' ? styles.userBubble : styles.bariBubble,
-                ]}
-              >
-                {msg.role === 'bari' ? (
-                  <View style={styles.bariHeaderRow}>
-                    <BariMascot size="sm" expression={loading ? 'thinking' : 'explaining'} showBadge />
-                    <Text style={styles.bariName}>Bari</Text>
-                  </View>
-                ) : null}
-
-                <Text
-                  style={[
-                    styles.messageText,
-                    msg.role === 'user' ? styles.userMessageText : styles.bariMessageText,
-                  ]}
-                >
-                  {msg.text}
-                </Text>
-
-                {/* Citations */}
-                {msg.citations && msg.citations.length > 0 ? (
-                  <View style={styles.citationsContainer}>
-                    <Text style={styles.citationsLabel}>SOURCE EVIDENCE</Text>
-                    <View style={styles.citationPills}>
-                      {msg.citations.map((cit, idx) => {
-                        const locator = cit.locator || `Source ${idx + 1}`;
-                        const isExpanded = expandedCitation === locator;
-                        const matchingSegment = (msg.evidence || evidence).find(
-                          (e) => e.locator === cit.locator || e.segmentId === cit.segmentId,
-                        );
-
-                        return (
-                          <View key={`cit-${idx}`} style={styles.citationItem}>
-                            <Pressable
-                              accessibilityLabel={`View citation: ${locator}`}
-                              onPress={() => toggleCitation(locator)}
-                              style={[styles.citationPill, isExpanded && styles.citationPillActive]}
-                            >
-                              <Ionicons name="bookmark-outline" size={13} color={colors.tealDark} />
-                              <Text style={styles.citationText}>{locator}</Text>
-                              <Ionicons
-                                name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                                size={12}
-                                color={colors.tealDark}
-                              />
-                            </Pressable>
-
-                            {isExpanded && matchingSegment ? (
-                              <View style={styles.expandedCitationCard}>
-                                <Text style={styles.expandedCitationPath}>
-                                  {matchingSegment.sectionPath || matchingSegment.locator}
-                                </Text>
-                                <Text style={styles.expandedCitationText}>
-                                  {matchingSegment.text}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-                        );
-                      })}
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-            ))}
-
-            {loading ? (
-              <View style={[styles.messageBubble, styles.bariBubble, styles.loadingBubble]}>
-                <BariMascot size="sm" expression="thinking" />
-                <ActivityIndicator color={colors.teal} size="small" style={styles.loadingSpinner} />
-                <Text style={styles.loadingText}>Bari is reading your notes…</Text>
-              </View>
-            ) : null}
-          </ScrollView>
+              ) : null
+            }
+            renderItem={renderMessageItem}
+          />
 
           {/* Suggested Prompts */}
           {messages.length <= 2 && !loading ? (
@@ -298,6 +392,7 @@ export function BariChatModal({
               {SUGGESTIONS.map((sugg, i) => (
                 <Pressable
                   key={`sugg-${i}`}
+                  accessibilityRole="button"
                   onPress={() => void handleSend(sugg)}
                   style={styles.suggestionChip}
                 >
@@ -322,6 +417,8 @@ export function BariChatModal({
             />
             <Pressable
               accessibilityLabel="Send message"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !input.trim() || loading }}
               disabled={!input.trim() || loading}
               onPress={() => void handleSend()}
               style={[
@@ -352,11 +449,18 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: '#D0E4FF',
-    marginBottom: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+  },
+  mascotHeroCompact: {
+    paddingVertical: 8,
   },
   mascotHeroText: {
     flex: 1,
     gap: 2,
+  },
+  mascotHeroModel: {
+    flexShrink: 0,
   },
   mascotHeroTitle: {
     fontFamily: fonts.bold,
